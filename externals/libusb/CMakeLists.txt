@@ -115,6 +115,12 @@ if (MINGW OR (${CMAKE_SYSTEM_NAME} MATCHES "Linux") OR APPLE)
     add_dependencies(usb usb-build)
     target_link_libraries(usb INTERFACE "${LIBUSB_LIBRARIES}")
     target_include_directories(usb INTERFACE "${LIBUSB_INCLUDE_DIRS}")
+    if (APPLE)
+        # darwin_usb.c needs IOKit/CoreFoundation, and Security for its
+        # SecTask-based capture entitlement check.
+        target_link_libraries(usb INTERFACE
+            "-framework CoreFoundation" "-framework IOKit" "-framework Security" objc)
+    endif()
 
 else() # MINGW OR (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
     # Ensure libusb compiles with UTF-8 encoding on MSVC
