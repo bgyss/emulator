@@ -318,7 +318,6 @@ if (ARCHITECTURE_arm64 AND (ANDROID OR ${CMAKE_SYSTEM_NAME} STREQUAL "Linux"))
 endif()
 
 if (CITRON_ENABLE_METAL)
-    enable_language(OBJCXX)
     add_definitions(-DHAS_METAL=1)
 endif()
 
