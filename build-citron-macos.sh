@@ -8,8 +8,13 @@
 # library dependency through CPM at configure time (no submodule init needed),
 # downloads Qt through aqt and builds FFmpeg from source.
 #
+# Build tools come from the nix dev shell (flake.nix); mise is the task runner.
+# Prefer `mise run build|package|run|clean` (see mise.toml), which enter the
+# shell for you. Running this script directly works from `nix develop` or via
+# scripts/in-nix.
+#
 # Usage:
-#   ./build-citron-macos.sh setup              # once per machine
+#   ./build-citron-macos.sh check              # verify the nix shell's tools
 #   ./build-citron-macos.sh build [options]    # -> build/macos/bin/citron.app
 #   ./build-citron-macos.sh package [options]  # self-contained .app + .zip
 #   ./build-citron-macos.sh run [options]      # launch the built app
@@ -78,13 +83,11 @@ esac
 APP_PATH="${BUILD_DIR}/bin/citron.app"
 PACKAGE_DIR="${BUILD_DIR}/package"
 
-# Homebrew installs GNU libtool as glibtool/glibtoolize; libusb's bootstrap
-# needs the unprefixed names. aqt (from uv/pipx) lands in ~/.local/bin.
+# Tools (cmake, ninja, nasm, glslang, autotools, libtool, aqt, ...) come from
+# the nix dev shell. Apple clang and the SDK still come from the system.
 setup_env() {
-    local brew_prefix
-    brew_prefix="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
-    export PATH="${brew_prefix}/opt/libtool/libexec/gnubin:${HOME}/.local/bin:${brew_prefix}/bin:${PATH}"
-    # Always use Apple clang: a Homebrew/Nix gcc earlier on PATH can't link
+    [[ "${CITRON_NIX:-}" == 1 ]] || error "Not inside the nix dev shell. Run: mise run build  (or scripts/in-nix $0 ...)"
+    # Always use Apple clang: a Nix gcc/clang earlier on PATH can't link
     # against the macOS SDK. Use the /usr/bin xcrun shims (not the raw toolchain
     # binaries) and export SDKROOT so autotools sub-builds that bypass CMake's
     # -isysroot (OpenSSL, FFmpeg, libusb) still find the SDK headers.
@@ -94,41 +97,10 @@ setup_env() {
     export SDKROOT
 }
 
-# ── setup ────────────────────────────────────────────────────────────────────
-BREW_PACKAGES=(cmake ninja nasm glslang pkg-config autoconf automake libtool)
-
-stage_setup() {
-    header "Setting up macOS build dependencies"
-
-    if ! xcode-select -p >/dev/null 2>&1; then
-        info "Installing Xcode Command Line Tools (follow the dialog, then re-run setup)"
-        xcode-select --install || true
-        exit 1
-    fi
-    success "Xcode toolchain: $(xcode-select -p)"
-
-    command -v brew >/dev/null || error "Homebrew is required: https://brew.sh"
-    info "Installing Homebrew packages: ${BREW_PACKAGES[*]}"
-    brew install "${BREW_PACKAGES[@]}"
-
-    setup_env
-    if command -v aqt >/dev/null; then
-        success "aqt already installed: $(command -v aqt)"
-    elif command -v uv >/dev/null; then
-        uv tool install aqtinstall
-    elif command -v pipx >/dev/null; then
-        pipx install aqtinstall
-    else
-        info "Installing pipx to provide aqt (Qt downloader)"
-        brew install pipx
-        pipx install aqtinstall
-    fi
-
-    stage_check
-}
-
+# ── check ────────────────────────────────────────────────────────────────────
 stage_check() {
     setup_env
+    xcode-select -p >/dev/null 2>&1 || error "Xcode Command Line Tools are required: xcode-select --install"
     local ok=1 tool
     for tool in cmake ninja nasm glslangValidator pkg-config autoconf automake libtoolize aqt git perl python3; do
         if command -v "${tool}" >/dev/null; then
@@ -137,7 +109,7 @@ stage_check() {
             warn "  ${tool} -> NOT FOUND"; ok=0
         fi
     done
-    [[ ${ok} -eq 1 ]] || error "Missing tools. Run: ./build-citron-macos.sh setup"
+    [[ ${ok} -eq 1 ]] || error "Missing tools. Check packages in flake.nix"
 }
 
 # ── build ────────────────────────────────────────────────────────────────────
@@ -183,7 +155,7 @@ stage_build() {
     [[ -d "${APP_PATH}" ]] || error "Build finished but ${APP_PATH} is missing"
     success "Built ${APP_PATH}"
     [[ "${TESTS}" == "ON" ]] && success "Tests: ${BUILD_DIR}/bin/tests"
-    info "Run it with: ./build-citron-macos.sh run --build-dir ${BUILD_DIR}"
+    info "Run it with: mise run run"
 }
 
 # ── package ──────────────────────────────────────────────────────────────────
@@ -232,7 +204,7 @@ stage_package() {
 stage_run() {
     local app="${APP_PATH}"
     [[ -d "${PACKAGE_DIR}/citron.app" ]] && app="${PACKAGE_DIR}/citron.app"
-    [[ -d "${app}" ]] || error "No app at ${app}. Run: ./build-citron-macos.sh build"
+    [[ -d "${app}" ]] || error "No app at ${app}. Run: mise run build"
     info "Launching ${app}"
     exec "${app}/Contents/MacOS/citron"
 }
@@ -245,7 +217,6 @@ stage_clean() {
 }
 
 case "${STAGE}" in
-    setup)   stage_setup   ;;
     check)   stage_check   ;;
     build)   stage_build   ;;
     package) stage_package ;;

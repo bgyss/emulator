@@ -1,0 +1,35 @@
+# Nix (flake.nix) supplies every build tool; mise is the task runner.
+# All tasks go through scripts/in-nix, so they work with or without `nix develop`.
+# Extra options pass through, e.g. `mise run build -- --build-type Debug --lto`.
+
+[tasks.check]
+description = "Verify the nix shell provides every tool the macOS build needs"
+run = "scripts/in-nix ./build-citron-macos.sh check"
+
+[tasks.build]
+description = "Build build/macos/bin/citron.app"
+run = "scripts/in-nix ./build-citron-macos.sh build"
+
+[tasks.build-tests]
+description = "Build citron.app plus the Catch2 tests binary"
+run = "scripts/in-nix ./build-citron-macos.sh build --tests"
+
+[tasks.test]
+description = "Build and run the Catch2 tests"
+run = ["scripts/in-nix ./build-citron-macos.sh build --tests", "scripts/in-nix build/macos/bin/tests"]
+
+[tasks.package]
+description = "Self-contained, ad-hoc signed .app and zip in build/macos/package"
+run = "scripts/in-nix ./build-citron-macos.sh package"
+
+[tasks.run]
+description = "Launch the built app"
+run = "scripts/in-nix ./build-citron-macos.sh run"
+
+[tasks.clean]
+description = "Delete the build directory"
+run = "scripts/in-nix ./build-citron-macos.sh clean"
+
+[tasks.shell]
+description = "Open an interactive shell inside the nix dev environment"
+run = "scripts/in-nix $SHELL"

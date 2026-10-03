@@ -16,10 +16,15 @@ Dependencies come from CPM (`-DCITRON_USE_CPM=ON`, cached in `CPM_SOURCE_CACHE`)
 
 ### macOS (Apple Silicon)
 
-- `./build-citron-macos.sh setup` installs the Homebrew tools and `aqt`; run it once.
-- `./build-citron-macos.sh build` builds `build/macos/bin/citron.app`. Options: `--build-type`, `--build-dir`, `--lto`, `--tests`, `--jobs`.
-- `./build-citron-macos.sh package` makes a self-contained bundle in `build/macos/package/`: it runs `macdeployqt`, strips the rpath that points into the CPM cache, ad-hoc signs the app and zips it.
-- The script always builds with the `/usr/bin/clang` shims, because a Homebrew or Nix `gcc` on `PATH` can't link against the macOS SDK. It also exports `SDKROOT`, since the autotools sub-builds (OpenSSL, FFmpeg, libusb) don't get CMake's `-isysroot`. The raw toolchain clang that `xcrun --find clang` returns fails in OpenSSL's build with missing `<stdlib.h>`. It also puts Homebrew's `libtool/libexec/gnubin` on `PATH`, since libusb's bootstrap needs the unprefixed `libtoolize`.
+See `docs/BUILDING-CITRON-MACOS.md` for the full guide.
+
+- The macOS toolchain is defined by `flake.nix` (nix dev shell) and driven by `mise.toml` (task runner). Nix supplies cmake, ninja, nasm, glslang, pkg-config, autoconf/automake/libtool, `aqt`, clang-format and git. There is nothing to install with Homebrew, and the script has no `setup` stage. Apple clang and the SDK still come from Xcode (`xcode-select --install`).
+- `mise run build` builds `build/macos/bin/citron.app`. Pass options after `--`: `mise run build -- --build-type Debug --lto --jobs 8`. Other tasks: `check` (verify the shell's tools), `build-tests`, `test`, `package`, `run`, `clean`, `shell` (interactive nix shell). `mise tasks` lists them.
+- Each task runs through `scripts/in-nix`, which enters the flake's dev shell (and is a no-op when `CITRON_NIX=1` is already set, e.g. inside `nix develop`). It copies `flake.nix`/`flake.lock` into `.dev/nix-shell/` first so the huge `build/` tree is never copied into the Nix store and an untracked flake still works. `.dev/` is gitignored.
+- `./build-citron-macos.sh` is the real build driver (stages: `check`, `build`, `package`, `run`, `clean`; options: `--build-type`, `--build-dir`, `--lto`/`--no-lto`, `--tests`, `--jobs`). It refuses to run outside the nix shell. Run it through mise or `scripts/in-nix`, not bare.
+- `mise run package` makes a self-contained bundle in `build/macos/package/`: it runs `macdeployqt`, strips the rpath that points into the CPM cache, ad-hoc signs the app and zips it.
+- The dev shell is `mkShellNoCC` on purpose, and the script builds with the `/usr/bin/clang` shims, because a Nix `gcc`/`clang` on `PATH` can't link against the macOS SDK. The flake's `shellHook` unsets `DEVELOPER_DIR`/`SDKROOT` so `xcrun` resolves the real Xcode SDK, and the script exports `SDKROOT`, since the autotools sub-builds (OpenSSL, FFmpeg, libusb) don't get CMake's `-isysroot`. The raw toolchain clang that `xcrun --find clang` returns fails in OpenSSL's build with missing `<stdlib.h>`. Nix's `libtool` package supplies the unprefixed `libtoolize` that libusb's bootstrap needs.
+- dynarmic is patched through CPM: `patches/dynarmic-arm64-emit-assert-side-effects.patch`, wired in with `PATCHES` in `CMakeModules/dependencies.cmake`. dynarmic's `ASSERT` is plain `assert()`, so under `-DNDEBUG` the block-map inserts in `AddressSpace::Emit` were compiled out, which made the arm64 JIT re-emit every block and hang every game. Don't put side effects inside `ASSERT(...)` in dynarmic or in patches to it.
 - An unpackaged `bin/citron.app` finds Qt through an absolute `LC_RPATH` into the CPM cache, so it only runs on the machine that built it.
 
 How the macOS build differs at runtime:
