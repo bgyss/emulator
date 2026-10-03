@@ -25,6 +25,7 @@
 #   --build-dir <path>                            (default: build/macos)
 #   --lto / --no-lto      Link-time optimization  (default: off)
 #   --tests               Also build the Catch2 `tests` binary
+#   --metal               Also build the experimental native Metal renderer
 #   --jobs <n>            Parallel build jobs     (default: all cores)
 #
 # Runtime notes (Apple Silicon):
@@ -58,6 +59,7 @@ BUILD_TYPE="Release"
 BUILD_DIR="build/macos"
 LTO="OFF"
 TESTS="OFF"
+METAL="OFF"
 JOBS="$(sysctl -n hw.logicalcpu)"
 CPM_SOURCE_CACHE="${CPM_SOURCE_CACHE:-${HOME}/.cache/cpm}"
 HOST_ARCH="$(uname -m)"
@@ -69,6 +71,7 @@ while [[ $# -gt 0 ]]; do
         --lto)        LTO="ON"; shift ;;
         --no-lto)     LTO="OFF"; shift ;;
         --tests)      TESTS="ON"; shift ;;
+        --metal)      METAL="ON"; shift ;;
         --jobs)       JOBS="${2:?--jobs needs a value}"; shift 2 ;;
         -h|--help)    usage; exit 0 ;;
         *) error "Unknown argument: $1\nRun with --help for usage." ;;
@@ -131,6 +134,7 @@ stage_build() {
         "-DCITRON_USE_BUNDLED_FFMPEG=ON"
         "-DBUILD_TESTING=${TESTS}"
         "-DCITRON_TESTS=${TESTS}"
+        "-DCITRON_ENABLE_METAL=${METAL}"
         "-DCITRON_DOWNLOAD_TIME_ZONE_DATA=ON"
         "-DCITRON_CHECK_SUBMODULES=OFF"
         "-DCITRON_USE_LLVM_DEMANGLE=OFF"

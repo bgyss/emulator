@@ -211,7 +211,7 @@ void ConfigureGraphics::PopulateVSyncModeSelection(bool use_setting) {
     if (!Settings::IsConfiguringGlobal()) {
         vsync_restore_global_button->setVisible(!Settings::values.vsync_mode.UsingGlobal());
 
-        vsync_restore_global_button->setEnabled(backend == Settings::RendererBackend::Vulkan);
+        vsync_restore_global_button->setEnabled(backend != Settings::RendererBackend::Null);
     }
 }
 

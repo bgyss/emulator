@@ -56,6 +56,7 @@ mise run build -- --lto
 |`--build-dir <path>`                        |`build/macos` |
 |`--lto` / `--no-lto`                        |off           |
 |`--tests`                                   |off           |
+|`--metal`                                   |off           |
 |`--jobs <n>`                                |all cores     |
 
 ## Without mise
@@ -86,6 +87,9 @@ get CMake's `-isysroot`.
 
 - CPU emulation uses dynarmic's arm64 JIT. NCE and fastmem are Linux-only.
 - Vulkan runs on MoltenVK, which is copied into `Contents/Frameworks`.
+- `--metal` (`-DCITRON_ENABLE_METAL=ON`) adds an experimental native Metal
+  renderer, selectable as "Metal (Experimental)" in Graphics settings. It only
+  presents a cleared frame so far; guest graphics still need the Vulkan path.
 - Video decode is software-only (no VideoToolbox path).
 - An unpackaged `build/macos/bin/citron.app` finds Qt through an absolute
   rpath into the CPM cache, so it only runs on the machine that built it. Use

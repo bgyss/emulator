@@ -153,6 +153,8 @@ CMAKE_DEPENDENT_OPTION(CITRON_USE_FASTER_LD "Check if a faster linker is availab
 
 CMAKE_DEPENDENT_OPTION(USE_SYSTEM_MOLTENVK "Use the system MoltenVK lib (instead of the bundled one)" OFF "APPLE" OFF)
 
+CMAKE_DEPENDENT_OPTION(CITRON_ENABLE_METAL "Build the experimental native Metal renderer" OFF "APPLE" OFF)
+
 set(DEFAULT_ENABLE_OPENSSL ON)
 if (WIN32 OR APPLE)
     set(DEFAULT_ENABLE_OPENSSL OFF)
@@ -313,6 +315,11 @@ message(STATUS "Target architecture: ${ARCHITECTURE}")
 if (ARCHITECTURE_arm64 AND (ANDROID OR ${CMAKE_SYSTEM_NAME} STREQUAL "Linux"))
     set(HAS_NCE 1)
     add_definitions(-DHAS_NCE=1)
+endif()
+
+if (CITRON_ENABLE_METAL)
+    enable_language(OBJCXX)
+    add_definitions(-DHAS_METAL=1)
 endif()
 
 # Configure C++ standard

@@ -98,6 +98,7 @@ add_library(video_core STATIC
     gpu_thread.cpp
     gpu_thread.h
     guest_memory.h
+    host_api_error.h
     invalidation_accumulator.h
     memory_manager.cpp
     memory_manager.h
@@ -300,6 +301,22 @@ target_link_options(video_core PRIVATE ${FFmpeg_LDFLAGS})
 add_dependencies(video_core host_shaders)
 target_include_directories(video_core PRIVATE ${HOST_SHADERS_INCLUDE})
 target_link_libraries(video_core PRIVATE sirit Vulkan::Headers Vulkan::UtilityHeaders GPUOpen::VulkanMemoryAllocator)
+
+if (CITRON_ENABLE_METAL)
+    target_sources(video_core PRIVATE
+        renderer_metal/mtl_presenter.h
+        renderer_metal/mtl_presenter.mm
+        renderer_metal/renderer_metal.cpp
+        renderer_metal/renderer_metal.h
+    )
+    set_source_files_properties(renderer_metal/mtl_presenter.mm PROPERTIES
+        COMPILE_OPTIONS "-fobjc-arc"
+        SKIP_PRECOMPILE_HEADERS ON
+        SKIP_UNITY_BUILD_INCLUSION ON
+    )
+    target_link_libraries(video_core PRIVATE
+        "-framework Metal" "-framework QuartzCore" "-framework CoreGraphics" "-framework Foundation")
+endif()
 
 if (ENABLE_NSIGHT_AFTERMATH)
     if (NOT DEFINED ENV{NSIGHT_AFTERMATH_SDK})

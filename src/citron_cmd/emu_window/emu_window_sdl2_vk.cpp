@@ -64,7 +64,7 @@ EmuWindow_SDL2_VK::EmuWindow_SDL2_VK(InputCommon::InputSubsystem* input_subsyste
 #ifdef SDL_VIDEO_DRIVER_COCOA
     case SDL_SYSWM_TYPE::SDL_SYSWM_COCOA:
         window_info.type = Core::Frontend::WindowSystemType::Cocoa;
-        window_info.render_surface = SDL_Metal_CreateView(render_window);
+        window_info.render_surface = SDL_Metal_GetLayer(SDL_Metal_CreateView(render_window));
         break;
 #endif
 #ifdef SDL_VIDEO_DRIVER_ANDROID

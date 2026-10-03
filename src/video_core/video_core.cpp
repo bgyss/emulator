@@ -11,6 +11,9 @@
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/host1x/host1x.h"
 #include "video_core/renderer_base.h"
+#ifdef HAS_METAL
+#include "video_core/renderer_metal/renderer_metal.h"
+#endif
 #include "video_core/renderer_null/renderer_null.h"
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
 #include "video_core/video_core.h"
@@ -24,6 +27,13 @@ std::unique_ptr<VideoCore::RendererBase> CreateRenderer(Core::System& system, Co
         return std::make_unique<Vulkan::RendererVulkan>(emu_window, device_memory, gpu, std::move(context));
     case Settings::RendererBackend::Null:
         return std::make_unique<Null::RendererNull>(emu_window, gpu, std::move(context));
+    case Settings::RendererBackend::Metal:
+#ifdef HAS_METAL
+        return std::make_unique<Metal::RendererMetal>(emu_window, gpu, std::move(context));
+#else
+        LOG_WARNING(HW_GPU, "Metal renderer not built in, falling back to Vulkan");
+        return std::make_unique<Vulkan::RendererVulkan>(emu_window, device_memory, gpu, std::move(context));
+#endif
     default:
         return nullptr;
     }
