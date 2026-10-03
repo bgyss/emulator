@@ -161,6 +161,14 @@ struct VulkanRenderWidget : public RenderWidget {
     }
 };
 
+#ifdef HAS_METAL
+struct MetalRenderWidget : public RenderWidget {
+    explicit MetalRenderWidget(GRenderWindow* parent) : RenderWidget(parent) {
+        windowHandle()->setSurfaceType(QWindow::MetalSurface);
+    }
+};
+#endif
+
 struct NullRenderWidget : public RenderWidget {
     explicit NullRenderWidget(GRenderWindow* parent) : RenderWidget(parent) {}
 };
@@ -873,6 +881,16 @@ bool GRenderWindow::InitRenderTarget() {
     case Settings::RendererBackend::Null:
         InitializeNull();
         break;
+    case Settings::RendererBackend::Metal:
+#ifdef HAS_METAL
+        InitializeMetal();
+#else
+        // The renderer falls back to Vulkan when Metal is not built in.
+        if (!InitializeVulkan()) {
+            return false;
+        }
+#endif
+        break;
     default:
         InitializeNull();
         break;
@@ -955,6 +973,14 @@ bool GRenderWindow::InitializeVulkan() {
 
     return true;
 }
+
+#ifdef HAS_METAL
+void GRenderWindow::InitializeMetal() {
+    child_widget = new MetalRenderWidget(this);
+    child_widget->windowHandle()->create();
+    main_context = std::make_unique<DummyContext>();
+}
+#endif
 
 void GRenderWindow::InitializeNull() {
     child_widget = new NullRenderWidget(this);

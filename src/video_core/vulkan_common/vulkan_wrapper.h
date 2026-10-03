@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "common/common_types.h"
+#include "video_core/host_api_error.h"
 #include "video_core/vulkan_common/vulkan.h"
 
 #ifdef _MSC_VER
@@ -109,7 +110,7 @@ private:
 };
 
 /// Vulkan exception generated from a VkResult.
-class Exception final : public std::exception {
+class Exception final : public VideoCommon::HostApiError {
 public:
     /// Construct the exception with a result.
     /// @pre result != VK_SUCCESS
@@ -119,6 +120,10 @@ public:
     const char* what() const noexcept override;
     VkResult GetResult() const noexcept {
         return result;
+    }
+
+    bool IsOutOfMemory() const noexcept override {
+        return result == VK_ERROR_OUT_OF_DEVICE_MEMORY || result == VK_ERROR_OUT_OF_HOST_MEMORY;
     }
 
 private:

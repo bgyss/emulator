@@ -348,6 +348,10 @@ int main(int argc, char** argv) {
     case Settings::RendererBackend::Null:
         emu_window = std::make_unique<EmuWindow_SDL2_Null>(&input_subsystem, system, fullscreen);
         break;
+    case Settings::RendererBackend::Metal:
+        // The Vulkan window already exposes a CAMetalLayer on macOS, which is all Metal needs.
+        emu_window = std::make_unique<EmuWindow_SDL2_VK>(&input_subsystem, system, fullscreen);
+        break;
     default:
         emu_window = std::make_unique<EmuWindow_SDL2_VK>(&input_subsystem, system, fullscreen);
         break;

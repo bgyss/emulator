@@ -249,6 +249,9 @@ private:
     void OnMinimalClientAreaChangeRequest(std::pair<u32, u32> minimal_size) override;
 
     bool InitializeVulkan();
+#ifdef HAS_METAL
+    void InitializeMetal();
+#endif
     void InitializeNull();
 
     EmuThread* emu_thread;

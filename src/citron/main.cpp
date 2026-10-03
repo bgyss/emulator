@@ -499,7 +499,9 @@ GMainWindow::GMainWindow(std::unique_ptr<QtConfig> config_, bool has_broken_vulk
             tr("Vulkan initialization failed during boot.<br><br>For support, please visit <b>Help "
                "> Get Support (Discord)</b> in the main emulation window."));
 
-        Settings::values.renderer_backend = Settings::RendererBackend::Null;
+        if (Settings::values.renderer_backend.GetValue() == Settings::RendererBackend::Vulkan) {
+            Settings::values.renderer_backend = Settings::RendererBackend::Null;
+        }
         UpdateAPIText();
         renderer_status_button->setDisabled(true);
         renderer_status_button->setChecked(false);
@@ -1452,8 +1454,8 @@ void GMainWindow::InitializeWidgets() {
     connect(renderer_status_button, &QPushButton::clicked, this, &GMainWindow::OnToggleGraphicsAPI);
     UpdateAPIText();
     renderer_status_button->setCheckable(true);
-    renderer_status_button->setChecked(Settings::values.renderer_backend.GetValue() ==
-                                       Settings::RendererBackend::Vulkan);
+    renderer_status_button->setChecked(Settings::values.renderer_backend.GetValue() !=
+                                       Settings::RendererBackend::Null);
     renderer_status_button->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(renderer_status_button, &QPushButton::customContextMenuRequested,
             [this](const QPoint& menu_location) {
@@ -4672,13 +4674,13 @@ void GMainWindow::OnToggleAdaptingFilter() {
 
 void GMainWindow::OnToggleGraphicsAPI() {
     auto api = Settings::values.renderer_backend.GetValue();
-    if (api != Settings::RendererBackend::Vulkan) {
+    if (api == Settings::RendererBackend::Null) {
         api = Settings::RendererBackend::Vulkan;
     } else {
         api = Settings::RendererBackend::Null;
     }
     Settings::values.renderer_backend.SetValue(api);
-    renderer_status_button->setChecked(api == Settings::RendererBackend::Vulkan);
+    renderer_status_button->setChecked(api != Settings::RendererBackend::Null);
     UpdateAPIText();
 }
 
@@ -6037,8 +6039,8 @@ void GMainWindow::UpdateVolumeUI() {
 }
 
 void GMainWindow::UpdateStatusButtons() {
-    renderer_status_button->setChecked(Settings::values.renderer_backend.GetValue() ==
-                                       Settings::RendererBackend::Vulkan);
+    renderer_status_button->setChecked(Settings::values.renderer_backend.GetValue() !=
+                                       Settings::RendererBackend::Null);
     UpdateAPIText();
     UpdateGPUAccuracyButton();
     UpdateDockedButton();

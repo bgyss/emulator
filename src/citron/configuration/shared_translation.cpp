@@ -387,6 +387,9 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QWidget* parent) {
                           {
                               PAIR(RendererBackend, Vulkan, tr("Vulkan")),
                               PAIR(RendererBackend, Null, tr("Null")),
+#ifdef HAS_METAL
+                              PAIR(RendererBackend, Metal, tr("Metal (Experimental)")),
+#endif
                           }});
     translations->insert({Settings::EnumMetadata<Settings::GpuAccuracy>::Index(),
                           {
