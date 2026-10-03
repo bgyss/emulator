@@ -476,6 +476,8 @@ if ((ARCHITECTURE_x86_64 OR ARCHITECTURE_arm64) AND NOT (MSVC AND ARCHITECTURE_a
                 "DYNARMIC_USE_PRECOMPILED_HEADERS ${CITRON_USE_PRECOMPILED_HEADERS}"
                 "DYNARMIC_IGNORE_ASSERTS ON"
                 "DYNARMIC_TESTS OFF"
+            PATCHES
+                "${CMAKE_SOURCE_DIR}/patches/dynarmic-arm64-emit-assert-side-effects.patch"
         )
         if (TARGET dynarmic AND NOT TARGET dynarmic::dynarmic)
             add_library(dynarmic::dynarmic ALIAS dynarmic)

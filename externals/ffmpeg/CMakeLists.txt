@@ -56,7 +56,9 @@ if (NOT WIN32 AND NOT ANDROID)
     endforeach()
 
     find_package(PkgConfig REQUIRED)
-    if (NOT ANDROID)
+    # NVDEC/CUDA, VA-API and VDPAU don't exist on macOS; probing them there picks up
+    # the CPM-fetched ffnvcodec headers and FFmpeg's configure then rejects cuvid.
+    if (NOT ANDROID AND NOT APPLE)
         if (DEFINED FFNVCODEC_PKGCONFIG_DIR AND EXISTS "${FFNVCODEC_PKGCONFIG_DIR}/ffnvcodec.pc")
             set(ENV{PKG_CONFIG_PATH} "${FFNVCODEC_PKGCONFIG_DIR}:$ENV{PKG_CONFIG_PATH}")
         endif()
@@ -66,6 +68,12 @@ if (NOT WIN32 AND NOT ANDROID)
             pkg_check_modules(FFNVCODEC ffnvcodec)
         endif()
         pkg_check_modules(VDPAU vdpau)
+    elseif (APPLE)
+        # Clear results cached by an earlier configure of this build directory.
+        foreach(_hwaccel_pkg LIBVA CUDA FFNVCODEC VDPAU)
+            unset(${_hwaccel_pkg}_FOUND CACHE)
+            set(${_hwaccel_pkg}_FOUND FALSE)
+        endforeach()
     endif()
 
     set(FFmpeg_HWACCEL_LIBRARIES)
@@ -197,9 +205,14 @@ if (NOT WIN32 AND NOT ANDROID)
     set(FFmpeg_CC ${CMAKE_C_COMPILER_LAUNCHER}  ${CMAKE_C_COMPILER})
     set(FFmpeg_CXX ${CMAKE_CXX_COMPILER_LAUNCHER}  ${CMAKE_CXX_COMPILER})
 
+    # citron never decodes subtitles; without this, configure auto-enables iconv and
+    # the static libavcodec needs -liconv (unresolved on macOS).
+    set(FFmpeg_EXTRA_FLAGS --disable-iconv)
+
     # Invalidate existing Makefile if configure flags changed (e.g. adding Vulkan hwaccel)
     set(FFmpeg_SENTINEL_FILE "${FFmpeg_BUILD_DIR}/.citron_ffmpeg_configure_flags")
     string(JOIN "\n" FFmpeg_CURRENT_FLAGS
+        "EXTRA_FLAGS=${FFmpeg_EXTRA_FLAGS}"
         "HWACCEL_FLAGS=${FFmpeg_HWACCEL_FLAGS}"
         "HWACCEL_INCLUDE_DIRS=${FFmpeg_HWACCEL_INCLUDE_DIRS}"
         "HWACCEL_LDFLAGS=${FFmpeg_HWACCEL_LDFLAGS}")
@@ -234,6 +247,7 @@ if (NOT WIN32 AND NOT ANDROID)
                 --disable-ffprobe
                 --disable-network
                 --disable-swresample
+                ${FFmpeg_EXTRA_FLAGS}
                 --enable-decoder=h264
                 --enable-decoder=vp8
                 --enable-decoder=vp9
@@ -254,18 +268,19 @@ if (NOT WIN32 AND NOT ANDROID)
 
     # Workaround for Ubuntu 18.04's older version of make not being able to call make as a child
     # with context of the jobserver. Also helps ninja users.
-    execute_process(
-        COMMAND
-            nproc
-        OUTPUT_VARIABLE
-            SYSTEM_THREADS)
+    # (`nproc` doesn't exist on macOS.)
+    cmake_host_system_information(RESULT SYSTEM_THREADS QUERY NUMBER_OF_LOGICAL_CORES)
 
     set(FFmpeg_BUILD_LIBRARIES ${FFmpeg_LIBRARIES})
+    # Depend on the Makefile so a reconfigure (e.g. changed flags) re-runs make;
+    # otherwise the existing static libraries are treated as up to date.
     add_custom_command(
         OUTPUT
             ${FFmpeg_BUILD_LIBRARIES}
         COMMAND
             make -j${SYSTEM_THREADS}
+        DEPENDS
+            ${FFmpeg_MAKEFILE}
         WORKING_DIRECTORY
             ${FFmpeg_BUILD_DIR}
     )

@@ -69,9 +69,14 @@ externals/moltenvk-ios/
 *.keys
 *.dstore
 *.patch
+!patches/*.patch
 *.7z
 dtrace-out/
 *.diff
 .cache/
 
 .diagnostics/
+aqtinstall.log
+
+# nix/mise dev environment
+.dev/

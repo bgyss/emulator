@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Run a command inside the Citron nix dev shell (see flake.nix).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+if [[ "${CITRON_NIX:-}" == 1 ]]; then
+  exec "$@"
+fi
+# Snapshot just the flake files: this works while flake.nix is untracked and
+# keeps the multi-gigabyte build/ and externals/ trees out of the Nix store.
+mkdir -p .dev/nix-shell
+cp flake.nix .dev/nix-shell/flake.nix
+if [[ -f flake.lock ]]; then cp flake.lock .dev/nix-shell/flake.lock; fi
+nix develop "path:$PWD/.dev/nix-shell" --command "$@"
+# Keep a newly created lock file with the project.
+if [[ ! -f flake.lock && -f .dev/nix-shell/flake.lock ]]; then cp .dev/nix-shell/flake.lock flake.lock; fi

@@ -1,0 +1,18 @@
+--- a/src/dynarmic/backend/arm64/address_space.cpp	2026-10-03 15:23:15
++++ b/src/dynarmic/backend/arm64/address_space.cpp	2026-10-03 15:23:15
+@@ -115,9 +115,12 @@
+ 
+     EmittedBlockInfo block_info = EmitArm64(code, std::move(block), GetEmitConfig(), fastmem_manager);
+ 
+-    ASSERT(block_entries.insert({block.Location(), block_info.entry_point}).second);
+-    ASSERT(reverse_block_entries.insert({block_info.entry_point, block.Location()}).second);
+-    ASSERT(block_infos.insert({block_info.entry_point, block_info}).second);
++    // Do the inserts outside ASSERT: asserts compile away under NDEBUG, which would leave the
++    // block maps empty and make every GetOrEmit emit (and relink) the block again.
++    [[maybe_unused]] const bool inserted_entry = block_entries.insert({block.Location(), block_info.entry_point}).second;
++    [[maybe_unused]] const bool inserted_reverse = reverse_block_entries.insert({block_info.entry_point, block.Location()}).second;
++    [[maybe_unused]] const bool inserted_info = block_infos.insert({block_info.entry_point, block_info}).second;
++    ASSERT(inserted_entry && inserted_reverse && inserted_info);
+ 
+     Link(block_info);
+     RelinkForDescriptor(block.Location(), block_info.entry_point);

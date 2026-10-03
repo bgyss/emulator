@@ -307,9 +307,9 @@ if (_OPENSSL_TARGET STREQUAL "mingw64" OR
             "  Fedora/RHEL   : sudo dnf install nasm\n"
             "  openSUSE      : sudo zypper install nasm\n"
             "  MSYS2         : pacman -S mingw-w64-clang-x86_64-nasm\n"
-            "  macOS (Intel) : brew install nasm\n"
-            "Both build scripts (build-citron-linux.sh, build-clangtron-windows.sh) "
-            "already install nasm as part of their dependency setup.")
+            "  macOS         : provided by the nix dev shell (mise run build)\n"
+            "The Linux and Windows build scripts install nasm as part of their "
+            "dependency setup; the macOS build gets it from flake.nix.")
     endif()
     message(STATUS "[OpenSSL] NASM found: ${_OPENSSL_NASM}")
 endif()
