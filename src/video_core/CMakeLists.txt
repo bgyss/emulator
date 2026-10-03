@@ -309,8 +309,11 @@ if (CITRON_ENABLE_METAL)
         renderer_metal/renderer_metal.cpp
         renderer_metal/renderer_metal.h
     )
+    # Compile the one Objective-C++ file as CXX with -x instead of enabling the OBJCXX
+    # language: enabling it project-wide makes CMake build SDL's .m files as Objective-C++.
     set_source_files_properties(renderer_metal/mtl_presenter.mm PROPERTIES
-        COMPILE_OPTIONS "-fobjc-arc"
+        LANGUAGE CXX
+        COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc"
         SKIP_PRECOMPILE_HEADERS ON
         SKIP_UNITY_BUILD_INCLUSION ON
     )
