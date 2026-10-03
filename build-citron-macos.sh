@@ -207,7 +207,16 @@ stage_package() {
 # ── run / clean ──────────────────────────────────────────────────────────────
 stage_run() {
     local app="${APP_PATH}"
-    [[ -d "${PACKAGE_DIR}/citron.app" ]] && app="${PACKAGE_DIR}/citron.app"
+    local packaged="${PACKAGE_DIR}/citron.app"
+    # Launch the packaged bundle only when it is at least as new as the build, so a stale
+    # package from an earlier `mise run package` doesn't shadow a fresh `mise run build`.
+    if [[ -d "${packaged}" ]]; then
+        if [[ ! -d "${app}" || ! "${app}/Contents/MacOS/citron" -nt "${packaged}/Contents/MacOS/citron" ]]; then
+            app="${packaged}"
+        else
+            warn "Ignoring ${packaged}: it is older than ${APP_PATH}. Run 'mise run package' to refresh it."
+        fi
+    fi
     [[ -d "${app}" ]] || error "No app at ${app}. Run: mise run build"
     info "Launching ${app}"
     exec "${app}/Contents/MacOS/citron"
