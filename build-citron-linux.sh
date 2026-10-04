@@ -497,15 +497,15 @@ _setup_apt() {
     #       pkg_check_modules(LIBVA-DRM libva-drm REQUIRED)
     #       pkg_check_modules(LIBVA-X11 libva-x11 REQUIRED)
     #
-    # Additionally, SDL2's cmake (also CPM-sourced) runs CheckX11() whenever
-    # libX11.so.6 is findable on the system.  Inside CheckX11(), SDL2 2.x
-    # unconditionally hard-fails if Xext.h is absent:
+    # Additionally, SDL3's cmake (also CPM-sourced) runs CheckX11() when X11
+    # video support is wanted.  Unlike SDL2 2.x, SDL3 does not hard-fail when
+    # Xext.h is absent; it only enables the X11 video backend when both libX11
+    # and X11/extensions/Xext.h are found (`if(X11_LIB AND HAVE_XEXT_H)`) and
+    # otherwise silently builds without it, leaving citron-cmd with no X11
+    # window support (Wayland only).
     #
-    #   message_error("*** ERROR: Missing Xext.h, maybe you need to
-    #                  install the libxext-dev package?")
-    #
-    # This means libxext-dev MUST always be installed alongside libx11-dev.
-    # Installing libx11-dev without libxext-dev triggers the SDL2 hard-fail.
+    # So libxext-dev should still always be installed alongside libx11-dev.
+    # Installing libx11-dev without libxext-dev silently drops SDL3's X11 backend.
     #
     # These cascading REQUIRED constraints make libva-dev, libdrm-dev,
     # libx11-dev, and libxext-dev an all-or-nothing group: if libva-dev
@@ -520,8 +520,8 @@ _setup_apt() {
     # libva-x11-2    → runtime libva-x11.so
     # libdrm-dev     → libdrm.pc (REQUIRED by FFmpeg cmake when LIBVA_FOUND)
     # libx11-dev     → X11 headers (REQUIRED by FFmpeg cmake when LIBVA_FOUND)
-    # libxext-dev    → Xext.h (REQUIRED by SDL2 cmake whenever libX11.so.6 is
-    #                  findable, regardless of VAAPI; must travel with libx11-dev)
+    # libxext-dev    → Xext.h (needed for SDL3's X11 video backend to be enabled
+    #                  at all, regardless of VAAPI; must travel with libx11-dev)
     info "Installing VAAPI + X11 core packages (required together)..."
     sudo apt-get install -y \
         libva-dev libva-drm2 libva-x11-2 \
@@ -537,17 +537,17 @@ _setup_apt() {
         || warn "libvdpau-dev unavailable — FFmpeg will build with --disable-vdpau"
 
     # ── Linux audio output (ALSA + PulseAudio) — REQUIRED, not optional ─────
-    # SDL2's CheckALSA()/CheckPulseAudio() configure-time checks look for
-    # alsa/asoundlib.h and pulse/pulseaudio.h. If either header is missing,
-    # SDL2 silently disables that backend (SDL_ALSA / SDL_PULSEAUDIO → OFF)
-    # rather than hard-failing the build — the same "quiet fallback" pattern
-    # as the VAAPI/VDPAU checks above, except here the fallback is SDL2's
-    # SDL_DUMMYAUDIO/SDL_DISKAUDIO drivers, neither of which produces any
-    # actual sound. A machine missing both dev packages therefore still
-    # builds and packages successfully, but ships an AppImage with no
-    # functioning Linux audio output at all — a failure mode with no build
-    # warning to catch it, which is why this group is REQUIRED (unlike the
-    # --ignore-missing X11/XCB extras below).
+    # SDL3's CheckALSA() uses find_package(ALSA) (libasound + alsa/asoundlib.h)
+    # and CheckPulseAudio() uses pkg-config (libpulse >= 0.9.15). If either is
+    # missing, SDL3 disables that backend rather than hard-failing the build
+    # (the configure summary then reports SDL_ALSA / SDL_PULSEAUDIO as OFF) —
+    # the same "quiet fallback" pattern as the VAAPI/VDPAU checks above. ALSA at
+    # least prints a configure-time CMake WARNING; Pulse is fully silent, and
+    # so is a missing pkg-config. The fallback is SDL3's dummy/disk audio
+    # drivers, neither of which produces any actual sound. A machine missing
+    # both dev packages therefore still builds and packages successfully, but
+    # ships an AppImage with no functioning Linux audio output at all, which is
+    # why this group is REQUIRED (unlike the --ignore-missing X11 extras below).
     #
     # This also solves packaging determinism: package-citron-linux.sh finds
     # libasound.so.2 and libpulse.so.0 to bundle into the AppImage via
@@ -561,7 +561,7 @@ _setup_apt() {
     sudo apt-get install -y libasound2-dev libpulse-dev \
         || error "ALSA/PulseAudio dev packages failed to install — Linux builds would have no audio output"
 
-    # ── X11 / XCB optional extras (SDL2 Xi/XSS/XCB, Qt XCB platform plugin) ─
+    # ── X11 / XCB optional extras (SDL3 Xi/XSS, Qt XCB platform plugin) ─
     # These extend the X11 install above with input, screensaver, and XCB
     # extension headers.  All are optional — their cmake checks produce soft
     # warnings, not hard errors.  --ignore-missing lets a single unavailable
@@ -619,7 +619,7 @@ _setup_pacman() {
     $SUDO pacman -S --needed --noconfirm alsa-lib libpulse \
         || error "ALSA/PulseAudio packages failed to install — Linux builds would have no audio output"
 
-    # ── X11 / XCB optional extras (SDL2 Xi/XSS/XCB, Qt XCB platform plugin) ─
+    # ── X11 / XCB optional extras (SDL3 Xi/XSS, Qt XCB platform plugin) ─
     info "Installing optional X11/XCB extension packages..."
     $SUDO pacman -S --needed --noconfirm \
         libxi \
@@ -704,7 +704,7 @@ _setup_dnf() {
     sudo dnf install -y alsa-lib-devel pulseaudio-libs-devel \
         || error "ALSA/PulseAudio dev packages failed to install — Linux builds would have no audio output"
 
-    # ── X11 / XCB optional extras (SDL2 Xi/XSS/XCB, Qt XCB platform plugin) ─
+    # ── X11 / XCB optional extras (SDL3 Xi/XSS, Qt XCB platform plugin) ─
     info "Installing optional X11/XCB extension packages..."
     sudo dnf install -y \
         libXi-devel \
@@ -755,7 +755,7 @@ _setup_yum() {
     sudo yum install -y alsa-lib-devel pulseaudio-libs-devel \
         || error "ALSA/PulseAudio dev packages failed to install — Linux builds would have no audio output"
 
-    # ── X11 / XCB optional extras (SDL2 Xi/XSS/XCB, Qt XCB platform plugin) ─
+    # ── X11 / XCB optional extras (SDL3 Xi/XSS, Qt XCB platform plugin) ─
     info "Installing optional X11/XCB extension packages..."
     sudo yum install -y \
         libXi-devel \
@@ -805,7 +805,7 @@ _setup_zypper() {
     sudo zypper install -y --no-recommends alsa-devel libpulse-devel \
         || error "ALSA/PulseAudio dev packages failed to install — Linux builds would have no audio output"
 
-    # ── X11 / XCB optional extras (SDL2 Xi/XSS/XCB, Qt XCB platform plugin) ─
+    # ── X11 / XCB optional extras (SDL3 Xi/XSS, Qt XCB platform plugin) ─
     info "Installing optional X11/XCB extension packages..."
     sudo zypper install -y --no-recommends \
         libXi-devel \
@@ -853,7 +853,7 @@ _setup_emerge() {
     sudo emerge --ask=n media-libs/alsa-lib media-libs/libpulse \
         || error "ALSA/PulseAudio packages failed to install — Linux builds would have no audio output"
 
-    # ── X11 / XCB optional extras (SDL2 Xi/XSS/XCB, Qt XCB platform plugin) ─
+    # ── X11 / XCB optional extras (SDL3 Xi/XSS, Qt XCB platform plugin) ─
     info "Installing optional X11/XCB extension packages..."
     sudo emerge --ask=n \
         x11-libs/libXi \
