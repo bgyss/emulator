@@ -17,14 +17,17 @@ struct ResourceRef {
     MslResourceKind kind;
     u32 set;
     u32 binding;
+    u32 count;
 };
 
 /// Assigns MSL indices to resources and registers them with the compiler.
 class BindingAllocator {
 public:
-    BindingAllocator(spirv_cross::CompilerMSL& compiler_, u32 first_buffer_index)
+    BindingAllocator(spirv_cross::CompilerMSL& compiler_, u32 first_buffer_index,
+                     u32 buffer_index_limit_)
         : compiler{compiler_}, model{compiler.get_execution_model()},
-          next_buffer{first_buffer_index} {}
+          next_buffer{first_buffer_index},
+          buffer_index_limit{std::min(buffer_index_limit_, MAX_BUFFER_INDEX)} {}
 
     void Assign(const ResourceRef& ref, MslTranslation& out) {
         spirv_cross::MSLResourceBinding msl{};
@@ -32,24 +35,26 @@ public:
         msl.desc_set = ref.set;
         msl.binding = ref.binding;
 
-        MslBinding binding{.set = ref.set, .binding = ref.binding, .kind = ref.kind};
+        MslBinding binding{
+            .set = ref.set, .binding = ref.binding, .kind = ref.kind, .count = ref.count};
+        msl.count = ref.count;
         switch (ref.kind) {
         case MslResourceKind::Buffer:
-            binding.index = AllocateBuffer();
+            binding.index = Allocate(next_buffer, buffer_index_limit, "buffer", ref.count);
             msl.msl_buffer = binding.index;
             break;
         case MslResourceKind::Texture:
-            binding.index = Allocate(next_texture, MAX_TEXTURE_INDEX, "texture");
+            binding.index = Allocate(next_texture, MAX_TEXTURE_INDEX, "texture", ref.count);
             msl.msl_texture = binding.index;
             break;
         case MslResourceKind::CombinedImageSampler:
-            binding.index = Allocate(next_texture, MAX_TEXTURE_INDEX, "texture");
-            binding.sampler_index = Allocate(next_sampler, MAX_SAMPLER_INDEX, "sampler");
+            binding.index = Allocate(next_texture, MAX_TEXTURE_INDEX, "texture", ref.count);
+            binding.sampler_index = Allocate(next_sampler, MAX_SAMPLER_INDEX, "sampler", ref.count);
             msl.msl_texture = binding.index;
             msl.msl_sampler = binding.sampler_index;
             break;
         case MslResourceKind::Sampler:
-            binding.index = Allocate(next_sampler, MAX_SAMPLER_INDEX, "sampler");
+            binding.index = Allocate(next_sampler, MAX_SAMPLER_INDEX, "sampler", ref.count);
             msl.msl_sampler = binding.index;
             break;
         }
@@ -68,21 +73,24 @@ public:
     }
 
     [[nodiscard]] u32 AllocateBuffer() {
-        return Allocate(next_buffer, MAX_BUFFER_INDEX, "buffer");
+        return Allocate(next_buffer, buffer_index_limit, "buffer", 1);
     }
 
 private:
-    static u32 Allocate(u32& next, u32 limit, const char* what) {
-        if (next >= limit) {
+    static u32 Allocate(u32& next, u32 limit, const char* what, u32 count) {
+        if (next + count > limit) {
             throw spirv_cross::CompilerError(
                 fmt::format("shader needs more than {} Metal {} slots", limit, what));
         }
-        return next++;
+        const u32 index = next;
+        next += count;
+        return index;
     }
 
     spirv_cross::CompilerMSL& compiler;
     spv::ExecutionModel model;
     u32 next_buffer;
+    u32 buffer_index_limit;
     u32 next_texture{};
     u32 next_sampler{};
 };
@@ -91,10 +99,17 @@ void CollectResources(const spirv_cross::CompilerMSL& compiler,
                       const spirv_cross::SmallVector<spirv_cross::Resource>& resources,
                       MslResourceKind kind, std::vector<ResourceRef>& out) {
     for (const spirv_cross::Resource& resource : resources) {
+        // Arrays of resources take one index per element.
+        const spirv_cross::SPIRType& type = compiler.get_type(resource.type_id);
+        u32 count = 1;
+        for (size_t i = 0; i < type.array.size(); ++i) {
+            count *= std::max(type.array[i], 1U);
+        }
         out.push_back({
             .kind = kind,
             .set = compiler.get_decoration(resource.id, spv::DecorationDescriptorSet),
             .binding = compiler.get_decoration(resource.id, spv::DecorationBinding),
+            .count = count,
         });
     }
 }
@@ -106,7 +121,13 @@ MslTranslation Translate(std::span<const u32> spirv, const MslTranslationOptions
     msl_options.platform = options.ios ? spirv_cross::CompilerMSL::Options::iOS
                                        : spirv_cross::CompilerMSL::Options::macOS;
     msl_options.set_msl_version(3, 0);
+    msl_options.texture_1D_as_2D = options.texture_1d_as_2d;
+    // Fragment outputs must cover every component of their attachment.
+    msl_options.pad_fragment_output_components = true;
     compiler.set_msl_options(msl_options);
+    auto common_options = compiler.get_common_options();
+    common_options.vertex.flip_vert_y = options.flip_vertex_y;
+    compiler.set_common_options(common_options);
 
     const spirv_cross::ShaderResources resources = compiler.get_shader_resources();
     std::vector<ResourceRef> refs;
@@ -120,7 +141,8 @@ MslTranslation Translate(std::span<const u32> spirv, const MslTranslationOptions
     // Several variables can share a binding: the SPIR-V backend declares one storage buffer
     // variable per element type over the same guest buffer. They alias one Metal argument.
     std::ranges::sort(refs, [](const ResourceRef& lhs, const ResourceRef& rhs) {
-        return std::tie(lhs.set, lhs.binding, lhs.kind) < std::tie(rhs.set, rhs.binding, rhs.kind);
+        return std::tie(lhs.set, lhs.binding, lhs.kind, rhs.count) <
+               std::tie(rhs.set, rhs.binding, rhs.kind, lhs.count);
     });
     const auto [first_duplicate, last] = std::ranges::unique(refs, [](const ResourceRef& lhs,
                                                                       const ResourceRef& rhs) {
@@ -129,7 +151,7 @@ MslTranslation Translate(std::span<const u32> spirv, const MslTranslationOptions
     refs.erase(first_duplicate, last);
 
     MslTranslation out;
-    BindingAllocator allocator(compiler, options.first_buffer_index);
+    BindingAllocator allocator(compiler, options.first_buffer_index, options.buffer_index_limit);
     for (const ResourceRef& ref : refs) {
         allocator.Assign(ref, out);
     }

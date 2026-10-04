@@ -37,6 +37,9 @@ struct MslBinding {
     u32 index{};
     /// Only meaningful for CombinedImageSampler.
     u32 sampler_index{};
+    /// Array length; an array takes this many consecutive indices from index (and from
+    /// sampler_index).
+    u32 count{1};
 };
 
 struct MslTranslationOptions {
@@ -45,6 +48,14 @@ struct MslTranslationOptions {
     /// First buffer index the shader's resources may use. Vertex shaders share the buffer table
     /// with vertex buffers, so the caller can reserve the low indices for those.
     u32 first_buffer_index{};
+    /// One past the last buffer index the shader's resources may use, to keep the high indices
+    /// free for vertex buffers.
+    u32 buffer_index_limit{MAX_BUFFER_INDEX};
+    /// Negate clip-space Y in vertex outputs. The shader recompiler targets Vulkan, whose clip
+    /// space has Y pointing down; Metal's points up.
+    bool flip_vertex_y{};
+    /// Declare 1D images as 2D textures one texel high, the way the texture cache stores them.
+    bool texture_1d_as_2d{};
 };
 
 struct MslTranslation {

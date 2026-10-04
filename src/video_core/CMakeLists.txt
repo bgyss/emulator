@@ -315,6 +315,10 @@ if (CITRON_ENABLE_METAL)
         renderer_metal/mtl_clear_helper.mm
         renderer_metal/mtl_device.h
         renderer_metal/mtl_device.mm
+        renderer_metal/mtl_graphics_pipeline.h
+        renderer_metal/mtl_graphics_pipeline.mm
+        renderer_metal/mtl_pipeline_cache.h
+        renderer_metal/mtl_pipeline_cache.mm
         renderer_metal/mtl_presenter.h
         renderer_metal/mtl_presenter.mm
         renderer_metal/mtl_rasterizer.h
@@ -340,6 +344,8 @@ if (CITRON_ENABLE_METAL)
         renderer_metal/mtl_buffer_cache_base.mm
         renderer_metal/mtl_clear_helper.mm
         renderer_metal/mtl_device.mm
+        renderer_metal/mtl_graphics_pipeline.mm
+        renderer_metal/mtl_pipeline_cache.mm
         renderer_metal/mtl_presenter.mm
         renderer_metal/mtl_rasterizer.mm
         renderer_metal/mtl_scheduler.mm

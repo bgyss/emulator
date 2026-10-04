@@ -92,3 +92,22 @@ TEST_CASE("MSL translation reports errors instead of throwing", "[video_core][me
     REQUIRE_FALSE(overflow.translation.has_value());
     REQUIRE_FALSE(overflow.error.empty());
 }
+
+TEST_CASE("MSL translation flips vertex Y on request", "[video_core][metal]") {
+    const MslTranslation plain = Translate(VULKAN_PRESENT_VERT_SPV);
+    REQUIRE(plain.source.find("gl_Position.y = -(") == std::string::npos);
+    const MslTranslation flipped = Translate(VULKAN_PRESENT_VERT_SPV, {.flip_vertex_y = true});
+    INFO(flipped.source);
+    REQUIRE(flipped.source.find("gl_Position.y = -(") != std::string::npos);
+    RequireCompiles(flipped);
+}
+
+TEST_CASE("MSL translation keeps buffers below the index limit", "[video_core][metal]") {
+    // Two storage buffers plus the buffer size buffer.
+    const MslTranslationResult too_few =
+        TranslateSpirvToMsl(VULKAN_UINT8_COMP_SPV, {.buffer_index_limit = 2});
+    REQUIRE_FALSE(too_few.translation.has_value());
+    const MslTranslation fits = Translate(VULKAN_UINT8_COMP_SPV, {.buffer_index_limit = 3});
+    REQUIRE(fits.buffer_size_buffer == 2u);
+    RequireCompiles(fits);
+}

@@ -4,6 +4,7 @@
 #include "common/logging.h"
 #include "video_core/renderer_metal/mtl_device.h"
 #include "video_core/renderer_metal/mtl_scheduler.h"
+#include "video_core/renderer_metal/mtl_texture_cache.h"
 
 namespace Metal {
 
@@ -37,6 +38,22 @@ id<MTLComputeCommandEncoder> Scheduler::ComputeEncoder() {
         encoder_kind = EncoderKind::Compute;
     }
     return (id<MTLComputeCommandEncoder>)encoder;
+}
+
+id<MTLRenderCommandEncoder> Scheduler::RenderEncoder(const Framebuffer& framebuffer) {
+    RenderTargets targets{};
+    for (size_t index = 0; index < NUM_RT; ++index) {
+        targets[index] = (__bridge void*)framebuffer.ColorAttachment(index);
+    }
+    targets[NUM_RT] = (__bridge void*)framebuffer.DepthAttachment();
+    if (encoder_kind != EncoderKind::Render || render_targets != targets) {
+        EndEncoding();
+        encoder = [CommandBuffer()
+            renderCommandEncoderWithDescriptor:framebuffer.MakeRenderPassDescriptor()];
+        encoder_kind = EncoderKind::Render;
+        render_targets = targets;
+    }
+    return (id<MTLRenderCommandEncoder>)encoder;
 }
 
 void Scheduler::EndEncoding() {
