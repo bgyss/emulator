@@ -1,6 +1,6 @@
 # Native Metal Backend Plan
 
-Status as of 2026-10-04. Phase 0 and milestone 2 (present path) are done: the Metal renderer presents guest framebuffers read from guest memory, but the null rasterizer still stands in for the GPU, so GPU-drawn frames stay black. Milestone 3 has started: SPIR-V to MSL translation through SPIRV-Cross (`mtl_shader_translator.h`), and the device, scheduler and staging buffer pool (`mtl_device.h`, `mtl_scheduler.h`, `mtl_staging_buffer_pool.h`) in `video_core/renderer_metal/`.
+Status as of 2026-10-04. Phase 0 and milestone 2 (present path) are done: the Metal renderer presents guest framebuffers read from guest memory, but the null rasterizer still stands in for the GPU, so GPU-drawn frames stay black. Milestone 3 has started: SPIR-V to MSL translation through SPIRV-Cross (`mtl_shader_translator.h`), the device, scheduler and staging buffer pool (`mtl_device.h`, `mtl_scheduler.h`, `mtl_staging_buffer_pool.h`), and the buffer cache runtime (`mtl_buffer_cache.h`: private-storage buffers, blit copies and clears, 8-bit index and quad rewriting, and recorded bindings for the rasterizer) in `video_core/renderer_metal/`. The texture cache runtime is next.
 
 A native Metal renderer for Citron Neo mirrors about 26k lines of Vulkan-specific code (`renderer_vulkan/`, `vulkan_common/` and the SPIR-V shader backend); the emulation core and GPU caches are already backend-agnostic.
 

@@ -66,6 +66,11 @@ public:
         return max_buffer_length;
     }
 
+    /// Bytes currently allocated by this device's resources.
+    [[nodiscard]] u64 GetCurrentAllocatedSize() const {
+        return static_cast<u64>(device.currentAllocatedSize);
+    }
+
 private:
     id<MTLDevice> device;
     id<MTLCommandQueue> queue;
