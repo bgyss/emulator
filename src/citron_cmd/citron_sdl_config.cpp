@@ -1,13 +1,11 @@
 // SPDX-FileCopyrightText: 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// SDL will break our main function in citron-cmd if we don't define this before adding SDL.h
-#define SDL_MAIN_HANDLED
-#include <SDL.h>
+#include <SDL3/SDL.h>
 
+#include "citron_sdl_config.h"
 #include "common/logging.h"
 #include "input_common/main.h"
-#include "citron_sdl_config.h"
 
 const std::array<int, Settings::NativeButton::NumButtons> SdlConfig::default_buttons = {
     SDL_SCANCODE_A, SDL_SCANCODE_S, SDL_SCANCODE_Z, SDL_SCANCODE_X, SDL_SCANCODE_T,

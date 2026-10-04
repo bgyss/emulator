@@ -410,16 +410,18 @@ if (ENABLE_CUBEB AND NOT TARGET cubeb::cubeb)
     endif()
 endif()
 
-# ── SDL2 ──────────────────────────────────────────────────────────────────────
-if (CITRON_USE_EXTERNAL_SDL2 AND NOT TARGET SDL2::SDL2)
+# ── SDL3 ──────────────────────────────────────────────────────────────────────
+if (CITRON_USE_EXTERNAL_SDL3 AND NOT TARGET SDL3::SDL3)
     CPMAddPackage(
-        NAME SDL2
+        NAME SDL3
         GITHUB_REPOSITORY libsdl-org/SDL
-        GIT_TAG release-2.32.10
+        GIT_TAG release-3.4.18
         OPTIONS
             "SDL_SHARED OFF"
             "SDL_STATIC ON"
-            "SDL_TEST OFF"
+            "SDL_TEST_LIBRARY OFF"
+            "SDL_TESTS OFF"
+            "SDL_INSTALL OFF"
             "SDL_FORCE_STATIC_VCRT OFF"
             "SDL_HIDAPI_LIBUSB ON"
     )

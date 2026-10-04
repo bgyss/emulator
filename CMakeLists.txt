@@ -58,17 +58,18 @@ elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     add_compile_options(-fno-strict-aliasing)
 endif()
 
-# Check if SDL2::SDL2 target exists; if not, create an alias
-if (TARGET SDL2::SDL2-static)
-    add_library(SDL2::SDL2 ALIAS SDL2::SDL2-static)
-elseif (TARGET SDL2::SDL2-shared)
-    add_library(SDL2::SDL2 ALIAS SDL2::SDL2-shared)
+# Check if SDL3::SDL3 target exists; if not, create an alias
+if (NOT TARGET SDL3::SDL3)
+    if (TARGET SDL3::SDL3-static)
+        add_library(SDL3::SDL3 ALIAS SDL3::SDL3-static)
+    elseif (TARGET SDL3::SDL3-shared)
+        add_library(SDL3::SDL3 ALIAS SDL3::SDL3-shared)
+    endif()
 endif()
 
-# Set bundled sdl2/qt as dependent options.
-option(ENABLE_SDL2 "Enable the SDL2 frontend" ON)
-CMAKE_DEPENDENT_OPTION(CITRON_USE_BUNDLED_SDL2 "Download bundled SDL2 binaries" ON "ENABLE_SDL2;MSVC;NOT CITRON_CLANGCL" OFF)
-CMAKE_DEPENDENT_OPTION(CITRON_USE_EXTERNAL_SDL2 "Compile external SDL2" ON "ENABLE_SDL2;NOT MSVC OR CITRON_CLANGCL" OFF)
+# Set external sdl3/qt as dependent options.
+option(ENABLE_SDL3 "Enable the SDL3 frontend" ON)
+CMAKE_DEPENDENT_OPTION(CITRON_USE_EXTERNAL_SDL3 "Compile external SDL3" ON "ENABLE_SDL3" OFF)
 
 cmake_dependent_option(ENABLE_LIBUSB "Enable the use of LibUSB" ON "NOT ANDROID" OFF)
 
@@ -361,7 +362,7 @@ endif()
 # Set runtime library to MD/MDd for all configurations.
 # This MUST run before CPM dependencies are configured below: CMAKE_MSVC_RUNTIME_LIBRARY
 # is captured per-target at add_library()/add_executable() time (CMP0091), not
-# re-evaluated later. Some CPM packages (e.g. SDL2) have their own
+# re-evaluated later. Some CPM packages (e.g. SDL3) have their own
 # `if(NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)` fallback that bakes in a
 # different (static) default if this variable isn't already set by the time
 # their CMakeLists.txt runs -- so this has to be set before include(dependencies.cmake),
@@ -691,37 +692,12 @@ list(APPEND CITRON_QT_COMPONENTS2 Multimedia)
     set(CITRON_QT_COMPONENTS ${CITRON_QT_COMPONENTS2} PARENT_SCOPE)
     endfunction(set_citron_qt_components)
 
-# find SDL2 exports a bunch of variables that are needed, so its easier to do this outside of the citron_find_package
-if (ENABLE_SDL2)
-    if (CITRON_USE_BUNDLED_SDL2)
-        # Detect toolchain and platform
-        if (MSVC_VERSION GREATER_EQUAL 1920 AND ARCHITECTURE_x86_64)
-            set(SDL2_VER "SDL2-2.28.2")
-            set(SDL2_ARCH_DIR "x64")
-        elseif (MSVC_VERSION GREATER_EQUAL 1920 AND ARCHITECTURE_arm64)
-            set(SDL2_VER "SDL2-2.28.2")
-            set(SDL2_ARCH_DIR "arm64")
-        else()
-            message(FATAL_ERROR "No bundled SDL2 binaries for your toolchain. Disable CITRON_USE_BUNDLED_SDL2 and provide your own.")
-        endif()
-
-        if (DEFINED SDL2_VER)
-            download_bundled_external("sdl2/" ${SDL2_VER} SDL2_PREFIX)
-        endif()
-
-        set(SDL2_FOUND YES)
-        set(SDL2_INCLUDE_DIR "${SDL2_PREFIX}/include" CACHE PATH "Path to SDL2 headers")
-        set(SDL2_LIBRARY "${SDL2_PREFIX}/lib/${SDL2_ARCH_DIR}/SDL2.lib" CACHE PATH "Path to SDL2 library")
-        set(SDL2MAIN_LIBRARY "${SDL2_PREFIX}/lib/${SDL2_ARCH_DIR}/SDL2main.lib" CACHE PATH "Path to SDL2main library")
-        set(SDL2_DLL_DIR "${SDL2_PREFIX}/lib/${SDL2_ARCH_DIR}/" CACHE PATH "Path to SDL2.dll")
-
-        add_library(SDL2::SDL2 INTERFACE IMPORTED)
-        target_link_libraries(SDL2::SDL2 INTERFACE "${SDL2_LIBRARY}" "${SDL2MAIN_LIBRARY}")
-        target_include_directories(SDL2::SDL2 INTERFACE "${SDL2_INCLUDE_DIR}")
-    elseif (CITRON_USE_EXTERNAL_SDL2)
-        message(STATUS "Using SDL2 from externals.")
+# find SDL3 exports a bunch of variables that are needed, so its easier to do this outside of the citron_find_package
+if (ENABLE_SDL3)
+    if (CITRON_USE_EXTERNAL_SDL3)
+        message(STATUS "Using SDL3 from externals.")
     else()
-        find_package(SDL2 2.26.4 REQUIRED)
+        find_package(SDL3 3.2.0 REQUIRED)
     endif()
 endif()
 
@@ -912,8 +888,8 @@ if(CITRON_CLANGCL)
     endif()
 
     # PGO flags applied per-target to first-party targets only — never via global
-    # CMAKE_C/CXX_FLAGS, which SDL2 and other CPM sub-targets inherit. A PGO-instrumented
-    # citron.exe linked against plain SDL2 under the same LTO link fails with:
+    # CMAKE_C/CXX_FLAGS, which SDL3 and other CPM sub-targets inherit. A PGO-instrumented
+    # citron.exe linked against plain SDL3 under the same LTO link fails with:
     # "linking module flags 'ProfileSummary': IDs have conflicting values".
     # CITRON_CLANGCL_PGO_COMPILE_FLAGS/_LINK_FLAGS are empty by default;
     # only set by build-clangtron-windows.sh's clang-cl stage.
