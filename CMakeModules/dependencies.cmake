@@ -323,6 +323,27 @@ if (NOT CITRON_CLANGCL AND NOT TARGET SPIRV-Headers)
     )
 endif()
 
+# ── SPIRV-Cross (Metal renderer: SPIR-V to MSL) ───────────────────────────────
+# Same SDK tag as SPIRV-Headers. Only the MSL backend and what it depends on are built.
+if (CITRON_ENABLE_METAL AND NOT TARGET spirv-cross-msl)
+    CPMAddPackage(
+        NAME SPIRV-Cross
+        GITHUB_REPOSITORY KhronosGroup/SPIRV-Cross
+        GIT_TAG vulkan-sdk-1.4.304.1
+        OPTIONS
+            "SPIRV_CROSS_CLI OFF"
+            "SPIRV_CROSS_ENABLE_TESTS OFF"
+            "SPIRV_CROSS_SHARED OFF"
+            "SPIRV_CROSS_STATIC ON"
+            "SPIRV_CROSS_ENABLE_HLSL OFF"
+            "SPIRV_CROSS_ENABLE_CPP OFF"
+            "SPIRV_CROSS_ENABLE_REFLECT OFF"
+            "SPIRV_CROSS_ENABLE_C_API OFF"
+            "SPIRV_CROSS_ENABLE_UTIL OFF"
+            "SPIRV_CROSS_SKIP_INSTALL ON"
+    )
+endif()
+
 # ── enet ──────────────────────────────────────────────────────────────────────
 if (NOT TARGET enet::enet)
     CPMAddPackage(

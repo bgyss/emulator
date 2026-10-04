@@ -31,6 +31,19 @@ create_target_directory_groups(tests)
 target_link_libraries(tests PRIVATE common core input_common)
 target_link_libraries(tests PRIVATE ${PLATFORM_LIBRARIES} Catch2::Catch2WithMain Threads::Threads)
 
+if (CITRON_ENABLE_METAL)
+    # Objective-C++ so the test can check the generated MSL with the Metal compiler.
+    target_sources(tests PRIVATE video_core/metal_shader_translator.mm)
+    set_source_files_properties(video_core/metal_shader_translator.mm PROPERTIES
+        LANGUAGE CXX
+        COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc"
+        SKIP_PRECOMPILE_HEADERS ON
+    )
+    add_dependencies(tests host_shaders)
+    target_include_directories(tests PRIVATE ${CMAKE_BINARY_DIR}/src/video_core/host_shaders/include)
+    target_link_libraries(tests PRIVATE video_core "-framework Metal" "-framework Foundation")
+endif()
+
 add_test(NAME tests COMMAND tests)
 
 if (CITRON_USE_PRECOMPILED_HEADERS)
