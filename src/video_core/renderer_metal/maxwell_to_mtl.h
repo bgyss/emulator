@@ -10,8 +10,10 @@
 #import <Metal/Metal.h>
 
 #include <array>
+#include <optional>
 
 #include "common/common_types.h"
+#include "video_core/engines/maxwell_3d.h"
 #include "video_core/surface.h"
 #include "video_core/textures/texture.h"
 
@@ -63,6 +65,29 @@ void ApplyComponentOrder(ComponentOrder order,
                          std::array<Tegra::Texture::SwizzleSource, 4>& swizzle);
 
 [[nodiscard]] MTLTextureSwizzle Swizzle(Tegra::Texture::SwizzleSource source);
+
+using Maxwell = Tegra::Engines::Maxwell3D::Regs;
+
+/// Vertex attribute format, or MTLVertexFormatInvalid when Metal has none. Scaled formats
+/// return their integer formats; the shader converts them.
+[[nodiscard]] MTLVertexFormat VertexFormat(Maxwell::VertexAttribute::Type type,
+                                           Maxwell::VertexAttribute::Size size);
+
+[[nodiscard]] MTLCompareFunction ComparisonOp(Maxwell::ComparisonOp op);
+
+[[nodiscard]] MTLStencilOperation StencilOp(Maxwell::StencilOp::Op op);
+
+[[nodiscard]] MTLBlendOperation BlendEquation(Maxwell::Blend::Equation equation);
+
+[[nodiscard]] MTLBlendFactor BlendFactor(Maxwell::Blend::Factor factor);
+
+[[nodiscard]] MTLWinding FrontFace(Maxwell::FrontFace front_face);
+
+[[nodiscard]] MTLCullMode CullFace(Maxwell::CullFace cull_face);
+
+/// Primitive type a topology draws as, or nullopt when Metal can't draw it. Quads and quad
+/// strips draw as triangles after the buffer cache rewrites their indices.
+[[nodiscard]] std::optional<MTLPrimitiveType> PrimitiveType(Maxwell::PrimitiveTopology topology);
 
 namespace Sampler {
 

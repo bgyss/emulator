@@ -7,16 +7,19 @@
 #include <mutex>
 
 #include "common/alignment.h"
+#include "common/cityhash.h"
 #include "common/logging.h"
+#include "common/scope_exit.h"
 #include "common/settings.h"
 #include "core/device_memory_manager.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/control/channel_state.h"
-#include "video_core/dirty_flags.h"
+#include "video_core/engines/draw_manager.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/framebuffer_config.h"
 #include "video_core/gpu.h"
 #include "video_core/memory_manager.h"
+#include "video_core/renderer_metal/maxwell_to_mtl.h"
 #include "video_core/renderer_metal/mtl_device.h"
 #include "video_core/renderer_metal/mtl_rasterizer.h"
 #include "video_core/renderer_metal/mtl_scheduler.h"
@@ -29,6 +32,82 @@ namespace Metal {
 namespace {
 
 using Maxwell = Tegra::Engines::Maxwell3D::Regs;
+
+/// Draws recorded before the command buffer is committed, so the GPU starts on long frames.
+constexpr u32 DRAWS_PER_FLUSH = 2048;
+
+/// The first viewport, computed like the Vulkan renderer does. With the vertex shader's Y flip,
+/// Metal maps it to the same framebuffer coordinates as Vulkan, negative heights included.
+MTLViewport ViewportState(const Maxwell& regs) {
+    if (!regs.viewport_scale_offset_enabled) {
+        const auto width = static_cast<double>(regs.surface_clip.width);
+        const auto height = static_cast<double>(regs.surface_clip.height);
+        return {
+            .originX = static_cast<double>(regs.surface_clip.x),
+            .originY = static_cast<double>(regs.surface_clip.y),
+            .width = width > 0.0 ? width : 1.0,
+            .height = height > 0.0 ? height : 1.0,
+            .znear = 0.0,
+            .zfar = 1.0,
+        };
+    }
+    const auto& src = regs.viewport_transform[0];
+    const double x = src.translate_x - src.scale_x;
+    const double width = src.scale_x * 2.0f;
+    double y = src.translate_y - src.scale_y;
+    double height = src.scale_y * 2.0f;
+    if (regs.window_origin.mode != Maxwell::WindowOrigin::Mode::UpperLeft) {
+        y += regs.surface_clip.height;
+        height = -height;
+    }
+    if (src.swizzle.y == Maxwell::ViewportSwizzle::NegativeY) {
+        y += height;
+        height = -height;
+    }
+    const float reduce_z = regs.depth_mode == Maxwell::DepthMode::MinusOneToOne ? 1.0f : 0.0f;
+    return {
+        .originX = x,
+        .originY = y,
+        .width = width != 0.0 ? width : 1.0,
+        .height = height != 0.0 ? height : 1.0,
+        .znear = std::clamp(src.translate_z - src.scale_z * reduce_z, 0.0f, 1.0f),
+        .zfar = std::clamp(src.translate_z + src.scale_z, 0.0f, 1.0f),
+    };
+}
+
+/// The first scissor, clipped to the render area; the whole area when scissoring is off.
+MTLScissorRect ScissorState(const Maxwell& regs, u32 width, u32 height) {
+    const auto& src = regs.scissor_test[0];
+    if (!src.enable) {
+        return {0, 0, width, height};
+    }
+    const bool lower_left = regs.window_origin.mode != Maxwell::WindowOrigin::Mode::UpperLeft;
+    const s32 clip_height = regs.surface_clip.height;
+    const s32 min_y = std::max(lower_left ? clip_height - static_cast<s32>(src.max_y)
+                                          : static_cast<s32>(src.min_y),
+                               0);
+    const s32 max_y = std::max(lower_left ? clip_height - static_cast<s32>(src.min_y)
+                                          : static_cast<s32>(src.max_y),
+                               0);
+    const u32 x0 = std::min<u32>(src.min_x, width);
+    const u32 x1 = std::clamp<u32>(src.max_x, x0, width);
+    const u32 y0 = std::min<u32>(static_cast<u32>(min_y), height);
+    const u32 y1 = std::clamp<u32>(static_cast<u32>(max_y), y0, height);
+    return {x0, y0, x1 - x0, y1 - y0};
+}
+
+MTLStencilDescriptor* StencilFace(Maxwell::StencilOp::Op fail, Maxwell::StencilOp::Op zfail,
+                                  Maxwell::StencilOp::Op zpass, Maxwell::ComparisonOp func,
+                                  u32 read_mask, u32 write_mask) {
+    MTLStencilDescriptor* face = [[MTLStencilDescriptor alloc] init];
+    face.stencilFailureOperation = MaxwellToMTL::StencilOp(fail);
+    face.depthFailureOperation = MaxwellToMTL::StencilOp(zfail);
+    face.depthStencilPassOperation = MaxwellToMTL::StencilOp(zpass);
+    face.stencilCompareFunction = MaxwellToMTL::ComparisonOp(func);
+    face.readMask = read_mask & 0xFF;
+    face.writeMask = write_mask & 0xFF;
+    return face;
+}
 
 /// The clear rectangle: the first scissor when the clear uses it, else everything.
 MTLScissorRect ClearRect(const Maxwell& regs) {
@@ -187,6 +266,8 @@ RasterizerMetal::RasterizerMetal(Tegra::GPU& gpu_,
       texture_cache(texture_cache_runtime, device_memory),
       buffer_cache_runtime(device, scheduler, staging_buffer_pool),
       buffer_cache(device_memory, buffer_cache_runtime),
+      pipeline_cache(device_memory, device, scheduler, buffer_cache, buffer_cache_runtime,
+                     texture_cache),
       accelerate_dma(buffer_cache, texture_cache),
       fence_manager(*this, gpu, texture_cache, buffer_cache, query_cache, scheduler) {}
 
@@ -198,15 +279,186 @@ void RasterizerMetal::Shutdown() {
     scheduler.Finish();
 }
 
-void RasterizerMetal::Draw(bool, u32) {
-    if (!logged_draw) {
-        logged_draw = true;
-        LOG_WARNING(Render_Metal, "Draws are not implemented on Metal yet; skipping them");
+void RasterizerMetal::Draw(bool is_indexed, u32 instance_count) {
+    SCOPE_EXIT {
+        gpu.TickWork();
+    };
+    gpu_memory->FlushCaching();
+
+    if (instance_count == 0) {
+        return;
+    }
+    GraphicsPipeline* const pipeline = pipeline_cache.CurrentGraphicsPipeline();
+    if (pipeline == nullptr) {
+        return;
+    }
+    const auto& draw_state = maxwell3d->draw_manager->GetDrawState();
+    const auto primitive = MaxwellToMTL::PrimitiveType(draw_state.topology);
+    if (!primitive) {
+        if (!logged_topology) {
+            logged_topology = true;
+            LOG_WARNING(Render_Metal, "Topology {} is not implemented on Metal; skipping its draws",
+                        static_cast<u32>(draw_state.topology));
+        }
+        return;
+    }
+
+    std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};
+    id<MTLRenderCommandEncoder> encoder = pipeline->Configure(*maxwell3d, *gpu_memory, is_indexed);
+    if (encoder == nil) {
+        return;
+    }
+    if (!UpdateDynamicState(encoder, *texture_cache.GetFramebuffer())) {
+        return;
+    }
+    const bool is_quads = draw_state.topology == Maxwell::PrimitiveTopology::Quads ||
+                          draw_state.topology == Maxwell::PrimitiveTopology::QuadStrip;
+    if (is_indexed || is_quads) {
+        const IndexBufferBinding& index = buffer_cache_runtime.GetIndexBuffer();
+        NSUInteger offset = index.offset;
+        u32 count = 0;
+        if (index.rewritten_count) {
+            // The rewritten indices start at the draw's first index.
+            count = *index.rewritten_count;
+        } else {
+            count = draw_state.index_buffer.count;
+            const NSUInteger index_size = index.type == MTLIndexTypeUInt16 ? 2 : 4;
+            offset += NSUInteger{draw_state.index_buffer.first} * index_size;
+        }
+        if (count == 0 || index.buffer == nil) {
+            return;
+        }
+        // Non-indexed quads were rewritten into absolute vertex numbers.
+        const NSInteger base_vertex = is_indexed ? static_cast<s32>(draw_state.base_index) : 0;
+        [encoder drawIndexedPrimitives:*primitive
+                            indexCount:count
+                             indexType:index.type
+                           indexBuffer:index.buffer
+                     indexBufferOffset:offset
+                         instanceCount:instance_count
+                            baseVertex:base_vertex
+                          baseInstance:draw_state.base_instance];
+    } else {
+        if (draw_state.vertex_buffer.count == 0) {
+            return;
+        }
+        [encoder drawPrimitives:*primitive
+                    vertexStart:draw_state.vertex_buffer.first
+                    vertexCount:draw_state.vertex_buffer.count
+                  instanceCount:instance_count
+                   baseInstance:draw_state.base_instance];
+    }
+    if (++draw_counter >= DRAWS_PER_FLUSH) {
+        draw_counter = 0;
+        scheduler.Flush();
     }
 }
 
 void RasterizerMetal::DrawTexture() {
-    Draw(false, 1);
+    static bool logged{};
+    if (!logged) {
+        logged = true;
+        LOG_WARNING(Render_Metal, "Texture draws are not implemented on Metal yet");
+    }
+}
+
+bool RasterizerMetal::UpdateDynamicState(id<MTLRenderCommandEncoder> encoder,
+                                         const Framebuffer& framebuffer) {
+    const auto& regs = maxwell3d->regs;
+    const MTLScissorRect scissor = ScissorState(regs, framebuffer.Width(), framebuffer.Height());
+    if (scissor.width == 0 || scissor.height == 0) {
+        return false;
+    }
+    [encoder setViewport:ViewportState(regs)];
+    [encoder setScissorRect:scissor];
+
+    if (regs.gl_cull_test_enabled) {
+        if (regs.gl_cull_face == Maxwell::CullFace::FrontAndBack) {
+            // Metal can't cull both faces; nothing would be drawn anyway.
+            return false;
+        }
+        [encoder setCullMode:MaxwellToMTL::CullFace(regs.gl_cull_face)];
+    } else {
+        [encoder setCullMode:MTLCullModeNone];
+    }
+    // Same as the Vulkan renderer: a flipped window origin flips the winding.
+    MTLWinding winding = MaxwellToMTL::FrontFace(regs.gl_front_face);
+    if (regs.window_origin.flip_y != 0) {
+        winding = winding == MTLWindingClockwise ? MTLWindingCounterClockwise
+                                                 : MTLWindingClockwise;
+    }
+    [encoder setFrontFacingWinding:winding];
+    [encoder setTriangleFillMode:regs.polygon_mode_front == Maxwell::PolygonMode::Line
+                                     ? MTLTriangleFillModeLines
+                                     : MTLTriangleFillModeFill];
+
+    const bool depth_bias = regs.polygon_offset_fill_enable || regs.polygon_offset_line_enable ||
+                            regs.polygon_offset_point_enable;
+    [encoder setDepthBias:depth_bias ? regs.depth_bias / 2.0f : 0.0f
+               slopeScale:depth_bias ? regs.slope_scale_depth_bias : 0.0f
+                    clamp:depth_bias ? regs.depth_bias_clamp : 0.0f];
+    [encoder setBlendColorRed:regs.blend_color.r
+                        green:regs.blend_color.g
+                         blue:regs.blend_color.b
+                        alpha:regs.blend_color.a];
+
+    [encoder setDepthStencilState:DepthStencilState(framebuffer)];
+    const bool two_sided = regs.stencil_two_side_enable != 0;
+    [encoder setStencilFrontReferenceValue:regs.stencil_front_ref & 0xFF
+                        backReferenceValue:(two_sided ? regs.stencil_back_ref
+                                                      : regs.stencil_front_ref) &
+                                           0xFF];
+    return true;
+}
+
+id<MTLDepthStencilState> RasterizerMetal::DepthStencilState(const Framebuffer& framebuffer) {
+    const auto& regs = maxwell3d->regs;
+    const bool has_depth = framebuffer.HasAspectDepthBit();
+    const bool has_stencil = framebuffer.HasAspectStencilBit();
+    const bool depth_test = has_depth && regs.depth_test_enable != 0;
+    const bool depth_write = has_depth && regs.depth_write_enabled != 0;
+    const bool stencil = has_stencil && regs.stencil_enable != 0;
+    const bool two_sided = regs.stencil_two_side_enable != 0;
+    const auto& back_op = two_sided ? regs.stencil_back_op : regs.stencil_front_op;
+    const u32 back_func_mask =
+        two_sided ? regs.stencil_back_func_mask : regs.stencil_front_func_mask;
+    const u32 back_mask = two_sided ? regs.stencil_back_mask : regs.stencil_front_mask;
+
+    const std::array<u32, 13> key{
+        depth_test ? 1U : 0U,
+        depth_write ? 1U : 0U,
+        depth_test ? static_cast<u32>(regs.depth_test_func) : 0U,
+        stencil ? 1U : 0U,
+        stencil ? static_cast<u32>(regs.stencil_front_op.fail) : 0U,
+        stencil ? static_cast<u32>(regs.stencil_front_op.zfail) : 0U,
+        stencil ? static_cast<u32>(regs.stencil_front_op.zpass) : 0U,
+        stencil ? static_cast<u32>(regs.stencil_front_op.func) : 0U,
+        stencil ? (regs.stencil_front_func_mask & 0xFF) | ((regs.stencil_front_mask & 0xFF) << 8)
+                : 0U,
+        stencil ? static_cast<u32>(back_op.fail) : 0U,
+        stencil ? static_cast<u32>(back_op.zfail) : 0U,
+        stencil ? static_cast<u32>(back_op.zpass) | (static_cast<u32>(back_op.func) << 16) : 0U,
+        stencil ? (back_func_mask & 0xFF) | ((back_mask & 0xFF) << 8) : 0U,
+    };
+    const u64 hash = Common::CityHash64(reinterpret_cast<const char*>(key.data()), sizeof(key));
+    if (const auto it = depth_stencil_states.find(hash); it != depth_stencil_states.end()) {
+        return it->second;
+    }
+    MTLDepthStencilDescriptor* desc = [[MTLDepthStencilDescriptor alloc] init];
+    desc.depthCompareFunction =
+        depth_test ? MaxwellToMTL::ComparisonOp(regs.depth_test_func) : MTLCompareFunctionAlways;
+    desc.depthWriteEnabled = depth_write ? YES : NO;
+    if (stencil) {
+        desc.frontFaceStencil =
+            StencilFace(regs.stencil_front_op.fail, regs.stencil_front_op.zfail,
+                        regs.stencil_front_op.zpass, regs.stencil_front_op.func,
+                        regs.stencil_front_func_mask, regs.stencil_front_mask);
+        desc.backFaceStencil = StencilFace(back_op.fail, back_op.zfail, back_op.zpass,
+                                           back_op.func, back_func_mask, back_mask);
+    }
+    id<MTLDepthStencilState> state = [device.GetDevice() newDepthStencilStateWithDescriptor:desc];
+    depth_stencil_states.emplace(hash, state);
+    return state;
 }
 
 void RasterizerMetal::DispatchCompute() {
@@ -367,6 +619,9 @@ void RasterizerMetal::InvalidateRegion(DAddr addr, u64 size, VideoCommon::CacheT
         std::scoped_lock lock{buffer_cache.mutex};
         buffer_cache.WriteMemory(addr, size);
     }
+    if (True(which & VideoCommon::CacheType::ShaderCache)) {
+        pipeline_cache.InvalidateRegion(addr, size);
+    }
 }
 
 void RasterizerMetal::InnerInvalidation(std::span<const std::pair<DAddr, std::size_t>> sequences) {
@@ -382,6 +637,9 @@ void RasterizerMetal::InnerInvalidation(std::span<const std::pair<DAddr, std::si
             buffer_cache.WriteMemory(addr, size);
         }
     }
+    for (const auto& [addr, size] : sequences) {
+        pipeline_cache.InvalidateRegion(addr, size);
+    }
 }
 
 bool RasterizerMetal::OnCPUWrite(DAddr addr, u64 size) {
@@ -394,8 +652,11 @@ bool RasterizerMetal::OnCPUWrite(DAddr addr, u64 size) {
             return true;
         }
     }
-    std::scoped_lock lock{texture_cache.mutex};
-    texture_cache.WriteMemory(addr, size);
+    {
+        std::scoped_lock lock{texture_cache.mutex};
+        texture_cache.WriteMemory(addr, size);
+    }
+    pipeline_cache.InvalidateRegion(addr, size);
     return false;
 }
 
@@ -407,8 +668,11 @@ void RasterizerMetal::OnCacheInvalidation(DAddr addr, u64 size) {
         std::scoped_lock lock{texture_cache.mutex};
         texture_cache.WriteMemory(addr, size);
     }
-    std::scoped_lock lock{buffer_cache.mutex};
-    buffer_cache.WriteMemory(addr, size);
+    {
+        std::scoped_lock lock{buffer_cache.mutex};
+        buffer_cache.WriteMemory(addr, size);
+    }
+    pipeline_cache.InvalidateRegion(addr, size);
 }
 
 void RasterizerMetal::InvalidateGPUCache() {
@@ -420,8 +684,11 @@ void RasterizerMetal::UnmapMemory(DAddr addr, u64 size) {
         std::scoped_lock lock{texture_cache.mutex};
         texture_cache.UnmapMemory(addr, size);
     }
-    std::scoped_lock lock{buffer_cache.mutex};
-    buffer_cache.WriteMemory(addr, size);
+    {
+        std::scoped_lock lock{buffer_cache.mutex};
+        buffer_cache.WriteMemory(addr, size);
+    }
+    pipeline_cache.OnCacheInvalidation(addr, size);
 }
 
 void RasterizerMetal::ModifyGPUMemory(size_t as_id, GPUVAddr addr, u64 size) {
@@ -509,8 +776,11 @@ void RasterizerMetal::AccelerateInlineToMemory(GPUVAddr address, size_t copy_siz
             buffer_cache.WriteMemory(*cpu_addr, copy_size);
         }
     }
-    std::scoped_lock lock{texture_cache.mutex};
-    texture_cache.WriteMemory(*cpu_addr, copy_size);
+    {
+        std::scoped_lock lock{texture_cache.mutex};
+        texture_cache.WriteMemory(*cpu_addr, copy_size);
+    }
+    pipeline_cache.InvalidateRegion(*cpu_addr, copy_size);
 }
 
 void RasterizerMetal::InitializeChannel(Tegra::Control::ChannelState& channel) {
@@ -520,8 +790,8 @@ void RasterizerMetal::InitializeChannel(Tegra::Control::ChannelState& channel) {
         texture_cache.CreateChannel(channel);
         buffer_cache.CreateChannel(channel);
     }
-    // The caches track render target, vertex buffer and similar changes through these tables.
-    VideoCommon::Dirty::SetupDirtyFlags(channel.maxwell_3d->dirty.tables);
+    pipeline_cache.CreateChannel(channel);
+    state_tracker.SetupTables(channel);
 }
 
 void RasterizerMetal::BindChannel(Tegra::Control::ChannelState& channel) {
@@ -532,14 +802,19 @@ void RasterizerMetal::BindChannel(Tegra::Control::ChannelState& channel) {
         texture_cache.BindToChannel(channel_id);
         buffer_cache.BindToChannel(channel_id);
     }
-    channel.maxwell_3d->dirty.flags.set();
+    pipeline_cache.BindToChannel(channel_id);
+    state_tracker.ChangeChannel(channel);
+    state_tracker.InvalidateState();
 }
 
 void RasterizerMetal::ReleaseChannel(s32 channel_id) {
     EraseChannel(channel_id);
-    std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};
-    texture_cache.EraseChannel(channel_id);
-    buffer_cache.EraseChannel(channel_id);
+    {
+        std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};
+        texture_cache.EraseChannel(channel_id);
+        buffer_cache.EraseChannel(channel_id);
+    }
+    pipeline_cache.EraseChannel(channel_id);
 }
 
 u64 RasterizerMetal::GetTotalVram() const {

@@ -276,6 +276,357 @@ MTLTextureSwizzle Swizzle(Tegra::Texture::SwizzleSource source) {
     return MTLTextureSwizzleZero;
 }
 
+MTLVertexFormat VertexFormat(Maxwell::VertexAttribute::Type type,
+                             Maxwell::VertexAttribute::Size size) {
+    using Type = Maxwell::VertexAttribute::Type;
+    using Size = Maxwell::VertexAttribute::Size;
+    // Metal has no scaled formats; the shader converts the integers (support_scaled_attributes).
+    if (type == Type::UScaled) {
+        type = Type::UInt;
+    } else if (type == Type::SScaled) {
+        type = Type::SInt;
+    }
+    switch (type) {
+    case Type::UNorm:
+        switch (size) {
+        case Size::Size_R8:
+        case Size::Size_A8:
+            return MTLVertexFormatUCharNormalized;
+        case Size::Size_R8_G8:
+        case Size::Size_G8_R8:
+            return MTLVertexFormatUChar2Normalized;
+        case Size::Size_R8_G8_B8:
+            return MTLVertexFormatUChar3Normalized;
+        case Size::Size_R8_G8_B8_A8:
+        case Size::Size_X8_B8_G8_R8:
+            return MTLVertexFormatUChar4Normalized;
+        case Size::Size_R16:
+            return MTLVertexFormatUShortNormalized;
+        case Size::Size_R16_G16:
+            return MTLVertexFormatUShort2Normalized;
+        case Size::Size_R16_G16_B16:
+            return MTLVertexFormatUShort3Normalized;
+        case Size::Size_R16_G16_B16_A16:
+            return MTLVertexFormatUShort4Normalized;
+        case Size::Size_A2_B10_G10_R10:
+            return MTLVertexFormatUInt1010102Normalized;
+        default:
+            break;
+        }
+        break;
+    case Type::SNorm:
+        switch (size) {
+        case Size::Size_R8:
+        case Size::Size_A8:
+            return MTLVertexFormatCharNormalized;
+        case Size::Size_R8_G8:
+        case Size::Size_G8_R8:
+            return MTLVertexFormatChar2Normalized;
+        case Size::Size_R8_G8_B8:
+            return MTLVertexFormatChar3Normalized;
+        case Size::Size_R8_G8_B8_A8:
+        case Size::Size_X8_B8_G8_R8:
+            return MTLVertexFormatChar4Normalized;
+        case Size::Size_R16:
+            return MTLVertexFormatShortNormalized;
+        case Size::Size_R16_G16:
+            return MTLVertexFormatShort2Normalized;
+        case Size::Size_R16_G16_B16:
+            return MTLVertexFormatShort3Normalized;
+        case Size::Size_R16_G16_B16_A16:
+            return MTLVertexFormatShort4Normalized;
+        case Size::Size_A2_B10_G10_R10:
+            return MTLVertexFormatInt1010102Normalized;
+        default:
+            break;
+        }
+        break;
+    case Type::UInt:
+        switch (size) {
+        case Size::Size_R8:
+        case Size::Size_A8:
+            return MTLVertexFormatUChar;
+        case Size::Size_R8_G8:
+        case Size::Size_G8_R8:
+            return MTLVertexFormatUChar2;
+        case Size::Size_R8_G8_B8:
+            return MTLVertexFormatUChar3;
+        case Size::Size_R8_G8_B8_A8:
+        case Size::Size_X8_B8_G8_R8:
+            return MTLVertexFormatUChar4;
+        case Size::Size_R16:
+            return MTLVertexFormatUShort;
+        case Size::Size_R16_G16:
+            return MTLVertexFormatUShort2;
+        case Size::Size_R16_G16_B16:
+            return MTLVertexFormatUShort3;
+        case Size::Size_R16_G16_B16_A16:
+            return MTLVertexFormatUShort4;
+        case Size::Size_R32:
+            return MTLVertexFormatUInt;
+        case Size::Size_R32_G32:
+            return MTLVertexFormatUInt2;
+        case Size::Size_R32_G32_B32:
+            return MTLVertexFormatUInt3;
+        case Size::Size_R32_G32_B32_A32:
+            return MTLVertexFormatUInt4;
+        default:
+            break;
+        }
+        break;
+    case Type::SInt:
+        switch (size) {
+        case Size::Size_R8:
+        case Size::Size_A8:
+            return MTLVertexFormatChar;
+        case Size::Size_R8_G8:
+        case Size::Size_G8_R8:
+            return MTLVertexFormatChar2;
+        case Size::Size_R8_G8_B8:
+            return MTLVertexFormatChar3;
+        case Size::Size_R8_G8_B8_A8:
+        case Size::Size_X8_B8_G8_R8:
+            return MTLVertexFormatChar4;
+        case Size::Size_R16:
+            return MTLVertexFormatShort;
+        case Size::Size_R16_G16:
+            return MTLVertexFormatShort2;
+        case Size::Size_R16_G16_B16:
+            return MTLVertexFormatShort3;
+        case Size::Size_R16_G16_B16_A16:
+            return MTLVertexFormatShort4;
+        case Size::Size_R32:
+            return MTLVertexFormatInt;
+        case Size::Size_R32_G32:
+            return MTLVertexFormatInt2;
+        case Size::Size_R32_G32_B32:
+            return MTLVertexFormatInt3;
+        case Size::Size_R32_G32_B32_A32:
+            return MTLVertexFormatInt4;
+        default:
+            break;
+        }
+        break;
+    case Type::Float:
+        switch (size) {
+        case Size::Size_R16:
+            return MTLVertexFormatHalf;
+        case Size::Size_R16_G16:
+            return MTLVertexFormatHalf2;
+        case Size::Size_R16_G16_B16:
+            return MTLVertexFormatHalf3;
+        case Size::Size_R16_G16_B16_A16:
+            return MTLVertexFormatHalf4;
+        case Size::Size_R32:
+            return MTLVertexFormatFloat;
+        case Size::Size_R32_G32:
+            return MTLVertexFormatFloat2;
+        case Size::Size_R32_G32_B32:
+            return MTLVertexFormatFloat3;
+        case Size::Size_R32_G32_B32_A32:
+            return MTLVertexFormatFloat4;
+        case Size::Size_B10_G11_R11:
+            return MTLVertexFormatFloatRG11B10;
+        default:
+            break;
+        }
+        break;
+    default:
+        break;
+    }
+    return MTLVertexFormatInvalid;
+}
+
+MTLCompareFunction ComparisonOp(Maxwell::ComparisonOp op) {
+    using Op = Maxwell::ComparisonOp;
+    switch (op) {
+    case Op::Never_D3D:
+    case Op::Never_GL:
+        return MTLCompareFunctionNever;
+    case Op::Less_D3D:
+    case Op::Less_GL:
+        return MTLCompareFunctionLess;
+    case Op::Equal_D3D:
+    case Op::Equal_GL:
+        return MTLCompareFunctionEqual;
+    case Op::LessEqual_D3D:
+    case Op::LessEqual_GL:
+        return MTLCompareFunctionLessEqual;
+    case Op::Greater_D3D:
+    case Op::Greater_GL:
+        return MTLCompareFunctionGreater;
+    case Op::NotEqual_D3D:
+    case Op::NotEqual_GL:
+        return MTLCompareFunctionNotEqual;
+    case Op::GreaterEqual_D3D:
+    case Op::GreaterEqual_GL:
+        return MTLCompareFunctionGreaterEqual;
+    case Op::Always_D3D:
+    case Op::Always_GL:
+        return MTLCompareFunctionAlways;
+    }
+    LOG_WARNING(Render_Metal, "Unimplemented comparison op={}", static_cast<u32>(op));
+    return MTLCompareFunctionAlways;
+}
+
+MTLStencilOperation StencilOp(Maxwell::StencilOp::Op op) {
+    using Op = Maxwell::StencilOp::Op;
+    switch (op) {
+    case Op::Keep_D3D:
+    case Op::Keep_GL:
+        return MTLStencilOperationKeep;
+    case Op::Zero_D3D:
+    case Op::Zero_GL:
+        return MTLStencilOperationZero;
+    case Op::Replace_D3D:
+    case Op::Replace_GL:
+        return MTLStencilOperationReplace;
+    case Op::IncrSaturate_D3D:
+    case Op::IncrSaturate_GL:
+        return MTLStencilOperationIncrementClamp;
+    case Op::DecrSaturate_D3D:
+    case Op::DecrSaturate_GL:
+        return MTLStencilOperationDecrementClamp;
+    case Op::Invert_D3D:
+    case Op::Invert_GL:
+        return MTLStencilOperationInvert;
+    case Op::Incr_D3D:
+    case Op::Incr_GL:
+        return MTLStencilOperationIncrementWrap;
+    case Op::Decr_D3D:
+    case Op::Decr_GL:
+        return MTLStencilOperationDecrementWrap;
+    }
+    LOG_WARNING(Render_Metal, "Unimplemented stencil op={}", static_cast<u32>(op));
+    return MTLStencilOperationKeep;
+}
+
+MTLBlendOperation BlendEquation(Maxwell::Blend::Equation equation) {
+    using Equation = Maxwell::Blend::Equation;
+    switch (equation) {
+    case Equation::Add_D3D:
+    case Equation::Add_GL:
+        return MTLBlendOperationAdd;
+    case Equation::Subtract_D3D:
+    case Equation::Subtract_GL:
+        return MTLBlendOperationSubtract;
+    case Equation::ReverseSubtract_D3D:
+    case Equation::ReverseSubtract_GL:
+        return MTLBlendOperationReverseSubtract;
+    case Equation::Min_D3D:
+    case Equation::Min_GL:
+        return MTLBlendOperationMin;
+    case Equation::Max_D3D:
+    case Equation::Max_GL:
+        return MTLBlendOperationMax;
+    }
+    LOG_WARNING(Render_Metal, "Unimplemented blend equation={}", static_cast<u32>(equation));
+    return MTLBlendOperationAdd;
+}
+
+MTLBlendFactor BlendFactor(Maxwell::Blend::Factor factor) {
+    using Factor = Maxwell::Blend::Factor;
+    switch (factor) {
+    case Factor::Zero_D3D:
+    case Factor::Zero_GL:
+        return MTLBlendFactorZero;
+    case Factor::One_D3D:
+    case Factor::One_GL:
+        return MTLBlendFactorOne;
+    case Factor::SourceColor_D3D:
+    case Factor::SourceColor_GL:
+        return MTLBlendFactorSourceColor;
+    case Factor::OneMinusSourceColor_D3D:
+    case Factor::OneMinusSourceColor_GL:
+        return MTLBlendFactorOneMinusSourceColor;
+    case Factor::SourceAlpha_D3D:
+    case Factor::SourceAlpha_GL:
+        return MTLBlendFactorSourceAlpha;
+    case Factor::OneMinusSourceAlpha_D3D:
+    case Factor::OneMinusSourceAlpha_GL:
+        return MTLBlendFactorOneMinusSourceAlpha;
+    case Factor::DestAlpha_D3D:
+    case Factor::DestAlpha_GL:
+        return MTLBlendFactorDestinationAlpha;
+    case Factor::OneMinusDestAlpha_D3D:
+    case Factor::OneMinusDestAlpha_GL:
+        return MTLBlendFactorOneMinusDestinationAlpha;
+    case Factor::DestColor_D3D:
+    case Factor::DestColor_GL:
+        return MTLBlendFactorDestinationColor;
+    case Factor::OneMinusDestColor_D3D:
+    case Factor::OneMinusDestColor_GL:
+        return MTLBlendFactorOneMinusDestinationColor;
+    case Factor::SourceAlphaSaturate_D3D:
+    case Factor::SourceAlphaSaturate_GL:
+        return MTLBlendFactorSourceAlphaSaturated;
+    case Factor::Source1Color_D3D:
+    case Factor::Source1Color_GL:
+        return MTLBlendFactorSource1Color;
+    case Factor::OneMinusSource1Color_D3D:
+    case Factor::OneMinusSource1Color_GL:
+        return MTLBlendFactorOneMinusSource1Color;
+    case Factor::Source1Alpha_D3D:
+    case Factor::Source1Alpha_GL:
+        return MTLBlendFactorSource1Alpha;
+    case Factor::OneMinusSource1Alpha_D3D:
+    case Factor::OneMinusSource1Alpha_GL:
+        return MTLBlendFactorOneMinusSource1Alpha;
+    case Factor::BlendFactor_D3D:
+    case Factor::ConstantColor_GL:
+        return MTLBlendFactorBlendColor;
+    case Factor::OneMinusBlendFactor_D3D:
+    case Factor::OneMinusConstantColor_GL:
+        return MTLBlendFactorOneMinusBlendColor;
+    case Factor::BothSourceAlpha_D3D:
+    case Factor::ConstantAlpha_GL:
+        return MTLBlendFactorBlendAlpha;
+    case Factor::OneMinusBothSourceAlpha_D3D:
+    case Factor::OneMinusConstantAlpha_GL:
+        return MTLBlendFactorOneMinusBlendAlpha;
+    }
+    LOG_WARNING(Render_Metal, "Unimplemented blend factor={}", static_cast<u32>(factor));
+    return MTLBlendFactorOne;
+}
+
+MTLWinding FrontFace(Maxwell::FrontFace front_face) {
+    return front_face == Maxwell::FrontFace::ClockWise ? MTLWindingClockwise
+                                                       : MTLWindingCounterClockwise;
+}
+
+MTLCullMode CullFace(Maxwell::CullFace cull_face) {
+    switch (cull_face) {
+    case Maxwell::CullFace::Front:
+        return MTLCullModeFront;
+    case Maxwell::CullFace::Back:
+        return MTLCullModeBack;
+    case Maxwell::CullFace::FrontAndBack:
+        // Metal can't cull both faces; the rasterizer skips such draws.
+        return MTLCullModeNone;
+    }
+    return MTLCullModeNone;
+}
+
+std::optional<MTLPrimitiveType> PrimitiveType(Maxwell::PrimitiveTopology topology) {
+    using Topology = Maxwell::PrimitiveTopology;
+    switch (topology) {
+    case Topology::Points:
+        return MTLPrimitiveTypePoint;
+    case Topology::Lines:
+        return MTLPrimitiveTypeLine;
+    case Topology::LineStrip:
+        return MTLPrimitiveTypeLineStrip;
+    case Topology::Triangles:
+    case Topology::Quads:
+    case Topology::QuadStrip:
+        return MTLPrimitiveTypeTriangle;
+    case Topology::TriangleStrip:
+        return MTLPrimitiveTypeTriangleStrip;
+    default:
+        return std::nullopt;
+    }
+}
+
 namespace Sampler {
 
 MTLSamplerMinMagFilter Filter(Tegra::Texture::TextureFilter filter) {

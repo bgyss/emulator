@@ -9,6 +9,7 @@
 
 #import <Metal/Metal.h>
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
@@ -18,6 +19,7 @@
 namespace Metal {
 
 class Device;
+class Framebuffer;
 
 /**
  * Records GPU work into one command buffer at a time and tracks its completion with ticks, like
@@ -49,6 +51,10 @@ public:
     /// A compute encoder on the current command buffer, reusing the open one if it is a compute
     /// encoder and ending any other open encoder.
     [[nodiscard]] id<MTLComputeCommandEncoder> ComputeEncoder();
+
+    /// A render encoder drawing to the framebuffer's attachments, reusing the open one if it
+    /// already draws to the same attachments and ending any other open encoder.
+    [[nodiscard]] id<MTLRenderCommandEncoder> RenderEncoder(const Framebuffer& framebuffer);
 
     /// Ends the open encoder, if any.
     void EndEncoding();
@@ -87,7 +93,11 @@ private:
         None,
         Blit,
         Compute,
+        Render,
     };
+
+    /// The attachments a render encoder draws to: 8 colors, then depth.
+    using RenderTargets = std::array<void*, 9>;
 
     void SignalGpuTick(u64 tick);
 
@@ -95,6 +105,7 @@ private:
     id<MTLCommandBuffer> command_buffer;
     id<MTLCommandEncoder> encoder;
     EncoderKind encoder_kind{EncoderKind::None};
+    RenderTargets render_targets{};
 
     std::atomic<u64> current_tick{1};
     std::atomic<u64> gpu_tick{0};

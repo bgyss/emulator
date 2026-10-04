@@ -964,6 +964,8 @@ MTLRenderPassDescriptor* Framebuffer::MakeRenderPassDescriptor() const {
     }
     desc.renderTargetWidth = width;
     desc.renderTargetHeight = height;
+    // Needed when the pass has no attachments.
+    desc.defaultRasterSampleCount = samples;
     return desc;
 }
 

@@ -11,6 +11,7 @@
 
 #include <memory>
 #include <optional>
+#include <unordered_map>
 
 #include "common/common_types.h"
 #include "video_core/control/channel_state_cache.h"
@@ -20,7 +21,9 @@
 #include "video_core/rasterizer_interface.h"
 #include "video_core/renderer_metal/mtl_buffer_cache.h"
 #include "video_core/renderer_metal/mtl_clear_helper.h"
+#include "video_core/renderer_metal/mtl_pipeline_cache.h"
 #include "video_core/renderer_metal/mtl_texture_cache.h"
+#include "video_core/renderer_vulkan/vk_state_tracker.h"
 
 namespace Tegra {
 struct FramebufferConfig;
@@ -115,9 +118,9 @@ struct FramebufferTexture {
 /**
  * Rasterizer for the Metal renderer.
  *
- * Owns the buffer and texture caches and keeps them in sync with guest memory, executes clears,
- * copies and blits, and finds GPU-rendered framebuffers for presentation. Draws and compute
- * dispatches are not implemented yet; they are skipped.
+ * Owns the buffer, texture and pipeline caches and keeps them in sync with guest memory, draws,
+ * executes clears, copies and blits, and finds GPU-rendered framebuffers for presentation.
+ * Compute dispatches, indirect draws and transform feedback are not implemented yet.
  */
 class RasterizerMetal final : public VideoCore::RasterizerInterface,
                               protected VideoCommon::ChannelSetupCaches<VideoCommon::ChannelInfo> {
@@ -184,6 +187,12 @@ public:
                                                         DAddr framebuffer_addr);
 
 private:
+    /// Sets the render encoder state the pipeline doesn't hold from the Maxwell registers.
+    /// @returns false when the draw can't produce anything and should be skipped.
+    bool UpdateDynamicState(id<MTLRenderCommandEncoder> encoder, const Framebuffer& framebuffer);
+
+    id<MTLDepthStencilState> DepthStencilState(const Framebuffer& framebuffer);
+
     Tegra::GPU& gpu;
     Tegra::MaxwellDeviceMemoryManager& device_memory;
     const Device& device;
@@ -196,10 +205,16 @@ private:
     BufferCacheRuntime buffer_cache_runtime;
     BufferCache buffer_cache;
     QueryCache query_cache;
+    PipelineCache pipeline_cache;
     AccelerateDMA accelerate_dma;
     FenceManager fence_manager;
+    /// Sets up the Maxwell dirty tables the pipeline key and the caches read. It only tracks
+    /// registers, so it is shared with the Vulkan renderer.
+    Vulkan::StateTracker state_tracker;
 
-    bool logged_draw{};
+    std::unordered_map<u64, id<MTLDepthStencilState>> depth_stencil_states;
+    u32 draw_counter{};
+    bool logged_topology{};
     bool logged_compute{};
 };
 

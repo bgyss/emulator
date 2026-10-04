@@ -223,12 +223,12 @@ public:
         descriptors.clear();
     }
 
+    /// A zero-filled buffer bound in place of a missing index or vertex buffer.
+    id<MTLBuffer> NullBuffer();
+
 private:
     void AddDescriptor(id<MTLBuffer> buffer, u32 offset, u32 size, BufferDescriptor::Kind kind,
                        bool is_written = false, VideoCore::Surface::PixelFormat format = {});
-
-    /// A zero-filled buffer bound in place of a missing index or vertex buffer.
-    id<MTLBuffer> NullBuffer();
 
     id<MTLComputePipelineState> IndexPipeline(bool assemble_quads);
 
