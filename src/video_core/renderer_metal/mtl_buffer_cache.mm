@@ -65,10 +65,11 @@ kernel void assemble_quads(device const uchar* src [[buffer(0)]], device uint* d
     if (quad >= p.count) {
         return;
     }
-    for (uint vertex = 0; vertex < 6; ++vertex) {
-        const uint i = p.is_strip != 0 ? quad * 2 + quad_strip_swizzle[vertex]
-                                       : quad * 4 + quad_swizzle[vertex];
-        dst[quad * 6 + vertex] = read_index(src, p.byte_offset, p.index_shift, i);
+    // "vertex" is a keyword in MSL.
+    for (uint corner = 0; corner < 6; ++corner) {
+        const uint i = p.is_strip != 0 ? quad * 2 + quad_strip_swizzle[corner]
+                                       : quad * 4 + quad_swizzle[corner];
+        dst[quad * 6 + corner] = read_index(src, p.byte_offset, p.index_shift, i);
     }
 }
 )";
