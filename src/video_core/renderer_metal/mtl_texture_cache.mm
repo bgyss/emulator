@@ -36,6 +36,105 @@ using VideoCore::Surface::DefaultBlockWidth;
 using VideoCore::Surface::GetFormatType;
 using VideoCore::Surface::SurfaceType;
 
+// Converts between guest depth/stencil texels and Metal's 32-bit float depth plus separate
+// 8-bit stencil. Layouts: 0 X8_D24 (depth in the low 24 bits), 1 D24S8 (depth in the low 24
+// bits, stencil in the high 8), 2 S8D24 (stencil in the low 8 bits, depth in the high 24),
+// 3 D32F_S8 (a float, then a word with stencil in the low 8 bits).
+constexpr const char* DEPTH_STENCIL_SHADER_SOURCE = R"(
+#include <metal_stdlib>
+using namespace metal;
+
+struct DepthStencilParams {
+    uint layout;
+    uint row_texels;   // texels per row of the guest buffer
+    uint image_texels; // texels per slice of the guest buffer
+    uint width;
+    uint height;
+    uint depth;
+};
+
+// precise::divide and rint make 24-bit values round-trip exactly under fast math.
+constant float UNORM24_MAX = 16777215.0f;
+
+kernel void unpack_depth_stencil(device const uint* guest [[buffer(0)]],
+                                 device float* depth_out [[buffer(1)]],
+                                 device uchar* stencil_out [[buffer(2)]],
+                                 constant DepthStencilParams& p [[buffer(3)]],
+                                 uint3 gid [[thread_position_in_grid]]) {
+    if (gid.x >= p.width || gid.y >= p.height || gid.z >= p.depth) {
+        return;
+    }
+    const uint src = gid.z * p.image_texels + gid.y * p.row_texels + gid.x;
+    const uint dst = (gid.z * p.height + gid.y) * p.width + gid.x;
+    float depth_value;
+    uint stencil = 0;
+    if (p.layout == 3) {
+        depth_value = as_type<float>(guest[src * 2]);
+        stencil = guest[src * 2 + 1] & 0xFFu;
+    } else {
+        const uint word = guest[src];
+        if (p.layout == 2) {
+            depth_value = precise::divide(float(word >> 8), UNORM24_MAX);
+            stencil = word & 0xFFu;
+        } else {
+            depth_value = precise::divide(float(word & 0xFFFFFFu), UNORM24_MAX);
+            stencil = word >> 24;
+        }
+    }
+    depth_out[dst] = depth_value;
+    if (p.layout != 0) {
+        stencil_out[dst] = uchar(stencil);
+    }
+}
+
+kernel void pack_depth_stencil(device uint* guest [[buffer(0)]],
+                               device const float* depth_in [[buffer(1)]],
+                               device const uchar* stencil_in [[buffer(2)]],
+                               constant DepthStencilParams& p [[buffer(3)]],
+                               uint3 gid [[thread_position_in_grid]]) {
+    if (gid.x >= p.width || gid.y >= p.height || gid.z >= p.depth) {
+        return;
+    }
+    const uint dst = gid.z * p.image_texels + gid.y * p.row_texels + gid.x;
+    const uint src = (gid.z * p.height + gid.y) * p.width + gid.x;
+    const float depth_value = depth_in[src];
+    const uint stencil = p.layout != 0 ? uint(stencil_in[src]) : 0u;
+    if (p.layout == 3) {
+        guest[dst * 2] = as_type<uint>(depth_value);
+        guest[dst * 2 + 1] = stencil;
+        return;
+    }
+    const uint unorm = uint(rint(clamp(depth_value, 0.0f, 1.0f) * UNORM24_MAX));
+    if (p.layout == 2) {
+        guest[dst] = (unorm << 8) | stencil;
+    } else {
+        guest[dst] = unorm | (stencil << 24);
+    }
+}
+)";
+
+struct DepthStencilParams {
+    u32 layout;
+    u32 row_texels;
+    u32 image_texels;
+    u32 width;
+    u32 height;
+    u32 depth;
+};
+
+u32 DepthStencilLayout(PixelFormat format) {
+    switch (format) {
+    case PixelFormat::X8_D24_UNORM:
+        return 0;
+    case PixelFormat::D24_UNORM_S8_UINT:
+        return 1;
+    case PixelFormat::S8_UINT_D24_UNORM:
+        return 2;
+    default:
+        return 3;
+    }
+}
+
 constexpr const char* BLIT_SHADER_SOURCE = R"(
 #include <metal_stdlib>
 using namespace metal;
@@ -100,7 +199,8 @@ BlockInfo GetBlockInfo(PixelFormat data_format) {
 }
 
 /// Whether texels can move between the texture and a buffer as they are laid out in guest
-/// memory. 24-bit depth is stored as 32-bit float, so those formats can't.
+/// memory with a plain blit. 24-bit depth is stored as 32-bit float and Metal copies depth and
+/// stencil separately, so those formats go through UploadDepthStencil and DownloadDepthStencil.
 bool IsBufferCopyable(PixelFormat data_format) {
     switch (data_format) {
     case PixelFormat::Invalid:
@@ -387,6 +487,195 @@ void TextureCacheRuntime::DrawBlit(ImageView& dst, ImageView& src, const Region2
     [encoder endEncoding];
 }
 
+bool TextureCacheRuntime::IsConvertedDepthStencil(PixelFormat data_format) noexcept {
+    switch (data_format) {
+    case PixelFormat::X8_D24_UNORM:
+    case PixelFormat::D24_UNORM_S8_UINT:
+    case PixelFormat::S8_UINT_D24_UNORM:
+    case PixelFormat::D32_FLOAT_S8_UINT:
+        return true;
+    default:
+        return false;
+    }
+}
+
+namespace {
+
+/// One copy's region in the tight depth and stencil buffers the conversion goes through.
+struct DepthStencilRegion {
+    DepthStencilParams params;
+    size_t texels;
+    /// Slices: layers of an array texture, or depth of a 3D texture.
+    u32 slices;
+};
+
+DepthStencilRegion MakeDepthStencilRegion(PixelFormat format, bool is_3d,
+                                          const BufferImageCopy& copy) {
+    const u32 slices = is_3d ? copy.image_extent.depth
+                             : static_cast<u32>(copy.image_subresource.num_layers);
+    const DepthStencilParams params{
+        .layout = DepthStencilLayout(format),
+        .row_texels = copy.buffer_row_length,
+        .image_texels = copy.buffer_row_length * copy.buffer_image_height,
+        .width = copy.image_extent.width,
+        .height = copy.image_extent.height,
+        .depth = slices,
+    };
+    return {
+        .params = params,
+        .texels = size_t{params.width} * params.height * slices,
+        .slices = slices,
+    };
+}
+
+void DispatchDepthStencil(Scheduler& scheduler, id<MTLComputePipelineState> pipeline,
+                          id<MTLBuffer> packed, size_t packed_offset, id<MTLBuffer> temp,
+                          size_t depth_offset, size_t stencil_offset,
+                          const DepthStencilParams& params) {
+    id<MTLComputeCommandEncoder> encoder = scheduler.ComputeEncoder();
+    [encoder setComputePipelineState:pipeline];
+    [encoder setBuffer:packed offset:packed_offset atIndex:0];
+    [encoder setBuffer:temp offset:depth_offset atIndex:1];
+    [encoder setBuffer:temp offset:stencil_offset atIndex:2];
+    [encoder setBytes:&params length:sizeof(params) atIndex:3];
+    const NSUInteger group_width =
+        std::clamp<NSUInteger>(params.width, 1, pipeline.threadExecutionWidth);
+    const NSUInteger max_rows =
+        std::max<NSUInteger>(pipeline.maxTotalThreadsPerThreadgroup / group_width, 1);
+    const NSUInteger group_height = std::clamp<NSUInteger>(params.height, 1, max_rows);
+    [encoder dispatchThreads:MTLSizeMake(params.width, params.height, params.depth)
+        threadsPerThreadgroup:MTLSizeMake(group_width, group_height, 1)];
+}
+
+} // Anonymous namespace
+
+void TextureCacheRuntime::UploadDepthStencil(const TextureCopyTarget& dst, id<MTLBuffer> buffer,
+                                             size_t offset,
+                                             std::span<const BufferImageCopy> copies) {
+    const bool has_stencil = dst.data_format != PixelFormat::X8_D24_UNORM;
+    id<MTLComputePipelineState> pipeline = DepthStencilPipeline(false);
+    for (const BufferImageCopy& copy : copies) {
+        const DepthStencilRegion region = MakeDepthStencilRegion(dst.data_format, dst.is_3d, copy);
+        if (region.texels == 0) {
+            continue;
+        }
+        // Depth floats, then stencil bytes.
+        const size_t depth_bytes = region.texels * sizeof(float);
+        const StagingBufferRef temp =
+            staging_buffer_pool.Request(depth_bytes + region.texels, MemoryUsage::Download);
+        const size_t stencil_offset = temp.offset + depth_bytes;
+        DispatchDepthStencil(scheduler, pipeline, buffer, offset + copy.buffer_offset,
+                             temp.buffer, temp.offset, stencil_offset, region.params);
+
+        const u32 width = region.params.width;
+        const u32 height = region.params.height;
+        const size_t slice_texels = size_t{width} * height;
+        id<MTLBlitCommandEncoder> encoder = scheduler.BlitEncoder();
+        const auto copy_aspect = [&](size_t base, size_t texel_bytes, MTLBlitOption option) {
+            for (u32 slice = 0; slice < (dst.is_3d ? 1 : region.slices); ++slice) {
+                const size_t row_bytes = width * texel_bytes;
+                [encoder copyFromBuffer:temp.buffer
+                           sourceOffset:base + slice * slice_texels * texel_bytes
+                      sourceBytesPerRow:row_bytes
+                    sourceBytesPerImage:dst.is_3d ? row_bytes * height : 0
+                             sourceSize:MTLSizeMake(width, height,
+                                                    dst.is_3d ? region.slices : 1)
+                              toTexture:dst.texture
+                       destinationSlice:static_cast<NSUInteger>(
+                                            dst.is_3d ? 0
+                                                      : copy.image_subresource.base_layer + slice)
+                       destinationLevel:static_cast<NSUInteger>(copy.image_subresource.base_level)
+                      destinationOrigin:MTLOriginMake(copy.image_offset.x, copy.image_offset.y,
+                                                      dst.is_3d ? copy.image_offset.z : 0)
+                                options:option];
+            }
+        };
+        copy_aspect(temp.offset, sizeof(float),
+                    has_stencil ? MTLBlitOptionDepthFromDepthStencil : MTLBlitOptionNone);
+        if (has_stencil) {
+            copy_aspect(stencil_offset, 1, MTLBlitOptionStencilFromDepthStencil);
+        }
+    }
+}
+
+void TextureCacheRuntime::DownloadDepthStencil(const TextureCopyTarget& src, id<MTLBuffer> buffer,
+                                               size_t offset,
+                                               std::span<const BufferImageCopy> copies) {
+    const bool has_stencil = src.data_format != PixelFormat::X8_D24_UNORM;
+    id<MTLComputePipelineState> pipeline = DepthStencilPipeline(true);
+    for (const BufferImageCopy& copy : copies) {
+        const DepthStencilRegion region = MakeDepthStencilRegion(src.data_format, src.is_3d, copy);
+        if (region.texels == 0) {
+            continue;
+        }
+        const size_t depth_bytes = region.texels * sizeof(float);
+        const StagingBufferRef temp =
+            staging_buffer_pool.Request(depth_bytes + region.texels, MemoryUsage::Download);
+        const size_t stencil_offset = temp.offset + depth_bytes;
+
+        const u32 width = region.params.width;
+        const u32 height = region.params.height;
+        const size_t slice_texels = size_t{width} * height;
+        id<MTLBlitCommandEncoder> encoder = scheduler.BlitEncoder();
+        const auto copy_aspect = [&](size_t base, size_t texel_bytes, MTLBlitOption option) {
+            for (u32 slice = 0; slice < (src.is_3d ? 1 : region.slices); ++slice) {
+                const size_t row_bytes = width * texel_bytes;
+                [encoder copyFromTexture:src.texture
+                                 sourceSlice:static_cast<NSUInteger>(
+                                                 src.is_3d
+                                                     ? 0
+                                                     : copy.image_subresource.base_layer + slice)
+                                 sourceLevel:static_cast<NSUInteger>(
+                                                 copy.image_subresource.base_level)
+                                sourceOrigin:MTLOriginMake(copy.image_offset.x, copy.image_offset.y,
+                                                           src.is_3d ? copy.image_offset.z : 0)
+                                  sourceSize:MTLSizeMake(width, height,
+                                                         src.is_3d ? region.slices : 1)
+                                    toBuffer:temp.buffer
+                           destinationOffset:base + slice * slice_texels * texel_bytes
+                      destinationBytesPerRow:row_bytes
+                    destinationBytesPerImage:src.is_3d ? row_bytes * height : 0
+                                     options:option];
+            }
+        };
+        copy_aspect(temp.offset, sizeof(float),
+                    has_stencil ? MTLBlitOptionDepthFromDepthStencil : MTLBlitOptionNone);
+        if (has_stencil) {
+            copy_aspect(stencil_offset, 1, MTLBlitOptionStencilFromDepthStencil);
+        }
+        DispatchDepthStencil(scheduler, pipeline, buffer, offset + copy.buffer_offset,
+                             temp.buffer, temp.offset, stencil_offset, region.params);
+    }
+}
+
+id<MTLComputePipelineState> TextureCacheRuntime::DepthStencilPipeline(bool pack) {
+    __strong id<MTLComputePipelineState>& pipeline =
+        pack ? pack_depth_stencil_pipeline : unpack_depth_stencil_pipeline;
+    if (pipeline != nil) {
+        return pipeline;
+    }
+    NSError* error = nil;
+    if (depth_stencil_library == nil) {
+        depth_stencil_library =
+            [device.GetDevice() newLibraryWithSource:@(DEPTH_STENCIL_SHADER_SOURCE)
+                                             options:nil
+                                               error:&error];
+        if (depth_stencil_library == nil) {
+            throw std::runtime_error(
+                std::string{"Failed to compile Metal depth/stencil shaders: "} +
+                error.localizedDescription.UTF8String);
+        }
+    }
+    id<MTLFunction> function = [depth_stencil_library
+        newFunctionWithName:pack ? @"pack_depth_stencil" : @"unpack_depth_stencil"];
+    pipeline = [device.GetDevice() newComputePipelineStateWithFunction:function error:&error];
+    if (pipeline == nil) {
+        throw std::runtime_error(std::string{"Failed to create Metal depth/stencil pipeline: "} +
+                                 error.localizedDescription.UTF8String);
+    }
+    return pipeline;
+}
+
 id<MTLRenderPipelineState> TextureCacheRuntime::BlitPipeline(MTLPixelFormat format, u32 kind) {
     const u64 key = (static_cast<u64>(format) << 2) | kind;
     if (const auto it = blit_pipelines.find(key); it != blit_pipelines.end()) {
@@ -630,6 +919,11 @@ void Image::UploadMemory(id<MTLBuffer> buffer, size_t offset,
     if (texture == nil) {
         return;
     }
+    if (TextureCacheRuntime::IsConvertedDepthStencil(data_format)) {
+        initialized = true;
+        runtime->UploadDepthStencil(CopyTarget(), buffer, offset, copies);
+        return;
+    }
     if (!IsBufferCopyable(data_format)) {
         LogUncopyable(info.format);
         return;
@@ -676,6 +970,12 @@ void Image::DownloadMemory(id<MTLBuffer> buffer, size_t offset,
 void Image::DownloadMemory(std::span<id<MTLBuffer>> buffers, std::span<size_t> offsets,
                            std::span<const BufferImageCopy> copies) {
     if (texture == nil) {
+        return;
+    }
+    if (TextureCacheRuntime::IsConvertedDepthStencil(data_format)) {
+        for (size_t index = 0; index < buffers.size(); ++index) {
+            runtime->DownloadDepthStencil(CopyTarget(), buffers[index], offsets[index], copies);
+        }
         return;
     }
     if (!IsBufferCopyable(data_format)) {
