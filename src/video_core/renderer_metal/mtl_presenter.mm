@@ -230,8 +230,10 @@ void Presenter::Present(std::span<const Layer> layers, const Layout::Framebuffer
                                  atIndex:0];
         for (size_t i = 0; i < layers.size(); ++i) {
             const Layer& source = layers[i];
+            id<MTLTexture> rendered = (__bridge id<MTLTexture>)source.texture;
             if (source.width == 0 || source.height == 0 ||
-                source.pixels.size() < size_t{source.width} * source.height * 4) {
+                (rendered == nil &&
+                 source.pixels.size() < size_t{source.width} * source.height * 4)) {
                 continue;
             }
             const std::array<ScreenVertex, 4> vertices{{
@@ -242,7 +244,8 @@ void Presenter::Present(std::span<const Layer> layers, const Layout::Framebuffer
             }};
             [encoder setRenderPipelineState:impl->pipelines[BlendIndex(source.blending)]];
             [encoder setVertexBytes:vertices.data() length:sizeof(vertices) atIndex:0];
-            [encoder setFragmentTexture:impl->UploadLayer(i, source) atIndex:0];
+            [encoder setFragmentTexture:rendered != nil ? rendered : impl->UploadLayer(i, source)
+                                atIndex:0];
             [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
         }
         [encoder endEncoding];

@@ -53,6 +53,11 @@ public:
     /// Ends the open encoder, if any.
     void EndEncoding();
 
+    /// Whether work has been recorded since the last flush.
+    [[nodiscard]] bool HasPendingCommands() const noexcept {
+        return command_buffer != nil;
+    }
+
     /// Commits the current command buffer and starts the next tick.
     /// @returns The tick that was submitted.
     u64 Flush();

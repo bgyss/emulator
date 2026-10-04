@@ -311,10 +311,14 @@ if (CITRON_ENABLE_METAL)
         renderer_metal/mtl_buffer_cache.h
         renderer_metal/mtl_buffer_cache.mm
         renderer_metal/mtl_buffer_cache_base.mm
+        renderer_metal/mtl_clear_helper.h
+        renderer_metal/mtl_clear_helper.mm
         renderer_metal/mtl_device.h
         renderer_metal/mtl_device.mm
         renderer_metal/mtl_presenter.h
         renderer_metal/mtl_presenter.mm
+        renderer_metal/mtl_rasterizer.h
+        renderer_metal/mtl_rasterizer.mm
         renderer_metal/mtl_scheduler.h
         renderer_metal/mtl_scheduler.mm
         renderer_metal/mtl_shader_translator.cpp
@@ -334,8 +338,10 @@ if (CITRON_ENABLE_METAL)
         renderer_metal/maxwell_to_mtl.mm
         renderer_metal/mtl_buffer_cache.mm
         renderer_metal/mtl_buffer_cache_base.mm
+        renderer_metal/mtl_clear_helper.mm
         renderer_metal/mtl_device.mm
         renderer_metal/mtl_presenter.mm
+        renderer_metal/mtl_rasterizer.mm
         renderer_metal/mtl_scheduler.mm
         renderer_metal/mtl_staging_buffer_pool.mm
         renderer_metal/mtl_texture_cache.mm
