@@ -47,15 +47,34 @@ Done (syntax-checked against the SDL3 3.4.18 headers; not yet built or run end t
 - Joy-Con HID code and Qt `main.cpp`: include paths only (the `SDL_hid_*` and screensaver APIs
   are unchanged).
 
-Not done / needs a human with hardware or a full toolchain:
+Verified since the migration landed:
 
-- Full builds on Linux, Windows (clang-cl and llvm-mingw) and macOS, and the Catch2 suite.
-- Controller testing (see Phase 3), audio latency/underrun testing, window behaviour on
-  X11/Wayland/Windows/macOS.
-- `build-citron-linux.sh` still carries SDL2-specific comments about configure-time checks
-  (`Xext.h`, ALSA/Pulse); they need re-verifying against SDL3's CMake.
+- macOS (Apple Silicon): `mise run build-tests` succeeds, so the Qt app, `citron-cmd` and the test
+  binary all build against SDL3 3.4.18 (SDL3 is linked statically). `citron-cmd --help` runs.
+- The SDL3 audio-stream approach used by the sink works at runtime on macOS: a standalone program
+  using the same calls (`SDL_OpenAudioDeviceStream` with a callback, 512-frame buffer hint,
+  `SDL_PutAudioStreamData`) gets callbacks at the expected rate and delivers about 48 kHz of data.
+- The Linux script's SDL2-specific comments were re-checked against SDL3's CMake and corrected
+  (SDL3 no longer hard-fails on a missing `Xext.h`; it silently drops the X11 backend. ALSA uses
+  `find_package(ALSA)` and warns; Pulse uses pkg-config and is silent).
+- Catch2 suite on macOS: 12 of 13 test cases pass. `CoreTiming[BasicOrder]` and
+  `HostMemory: Simple map` fail deterministically. They are outside the code this migration
+  touched (only `settings_enums.h` changed under `src/common` and `src/core`), but they have not
+  been compared against a pre-migration build.
+- On macOS SDL's configure reports `SDL_HIDAPI_LIBUSB` as OFF (macOS uses native HIDAPI). The
+  Linux and Windows values have not been checked.
+
+Still not done / needs a human with hardware or another toolchain:
+
+- Full builds on Linux and Windows (clang-cl and llvm-mingw).
+- Controller testing (see Phase 3), audio latency/underrun testing with the real sink, window
+  behaviour on X11/Wayland/Windows/macOS.
 - The Windows script's duplicate-symbol linker workarounds (`__cpuidex`,
-  `--allow-multiple-definition`, the `SDL_*_REAL` strip regex) may no longer be needed.
+  `--allow-multiple-definition`, the `SDL_*_REAL` strip regex) may no longer be needed; this can
+  only be checked with a Windows or llvm-mingw build.
+- `externals/CMakeLists.txt` only applies its unused-subsystem toggles when SDL is added as a
+  subdirectory. The CPM path builds Camera, GPU, Render, Dialog and Tray as well; turning those
+  off through the CPM `OPTIONS` would trim the build but has not been tried.
 
 ## Phase 1: build system
 
