@@ -175,5 +175,22 @@ public:
     virtual bool HasDrawTransformFeedback() {
         return false;
     }
+
+    /// Host memory statistics for the VRAM monitor, in bytes. 0 when the backend doesn't track them.
+    [[nodiscard]] virtual u64 GetTotalVram() const {
+        return 0;
+    }
+    [[nodiscard]] virtual u64 GetUsedVram() const {
+        return 0;
+    }
+    [[nodiscard]] virtual u64 GetBufferMemoryUsage() const {
+        return 0;
+    }
+    [[nodiscard]] virtual u64 GetTextureMemoryUsage() const {
+        return 0;
+    }
+    [[nodiscard]] virtual u64 GetStagingMemoryUsage() const {
+        return 0;
+    }
 };
 } // namespace VideoCore
