@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "video_core/renderer_metal/mtl_device.h"
 #include "video_core/renderer_metal/mtl_presenter.h"
 
 namespace Metal {
@@ -144,15 +145,9 @@ struct Presenter::Impl {
     }
 };
 
-Presenter::Presenter(void* layer) : impl{std::make_unique<Impl>()} {
-    impl->device = MTLCreateSystemDefaultDevice();
-    if (impl->device == nil) {
-        throw std::runtime_error("No Metal device available");
-    }
-    impl->queue = [impl->device newCommandQueue];
-    if (impl->queue == nil) {
-        throw std::runtime_error("Failed to create a Metal command queue");
-    }
+Presenter::Presenter(const Device& device, void* layer) : impl{std::make_unique<Impl>()} {
+    impl->device = device.GetDevice();
+    impl->queue = device.GetQueue();
 
     NSError* error = nil;
     id<MTLLibrary> library =
@@ -259,10 +254,6 @@ void Presenter::Present(std::span<const Layer> layers, const Layout::Framebuffer
         [command_buffer presentDrawable:drawable];
         [command_buffer commit];
     }
-}
-
-std::string Presenter::GetDeviceName() const {
-    return std::string{[[impl->device name] UTF8String]};
 }
 
 } // namespace Metal

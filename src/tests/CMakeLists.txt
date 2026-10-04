@@ -32,9 +32,15 @@ target_link_libraries(tests PRIVATE common core input_common)
 target_link_libraries(tests PRIVATE ${PLATFORM_LIBRARIES} Catch2::Catch2WithMain Threads::Threads)
 
 if (CITRON_ENABLE_METAL)
-    # Objective-C++ so the test can check the generated MSL with the Metal compiler.
-    target_sources(tests PRIVATE video_core/metal_shader_translator.mm)
-    set_source_files_properties(video_core/metal_shader_translator.mm PROPERTIES
+    # Objective-C++ so the tests can drive Metal directly.
+    target_sources(tests PRIVATE
+        video_core/metal_scheduler.mm
+        video_core/metal_shader_translator.mm
+    )
+    set_source_files_properties(
+        video_core/metal_scheduler.mm
+        video_core/metal_shader_translator.mm
+        PROPERTIES
         LANGUAGE CXX
         COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc"
         SKIP_PRECOMPILE_HEADERS ON

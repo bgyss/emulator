@@ -13,6 +13,9 @@
 #include "video_core/capture.h"
 #include "video_core/framebuffer_config.h"
 #include "video_core/gpu.h"
+#include "video_core/renderer_metal/mtl_device.h"
+#include "video_core/renderer_metal/mtl_scheduler.h"
+#include "video_core/renderer_metal/mtl_staging_buffer_pool.h"
 #include "video_core/renderer_metal/renderer_metal.h"
 #include "video_core/surface.h"
 #include "video_core/textures/decoders.h"
@@ -62,13 +65,18 @@ RendererMetal::RendererMetal(Core::Frontend::EmuWindow& emu_window,
                              Tegra::MaxwellDeviceMemoryManager& device_memory_, Tegra::GPU& gpu_,
                              std::unique_ptr<Core::Frontend::GraphicsContext> context_)
     : RendererBase(emu_window, std::move(context_)), device_memory(device_memory_), gpu(gpu_),
-      presenter(emu_window.GetWindowInfo().render_surface), rasterizer(gpu_) {
-    LOG_INFO(Render_Metal, "Metal device: {}", presenter.GetDeviceName());
+      device(std::make_unique<Device>()), scheduler(std::make_unique<Scheduler>(*device)),
+      staging_buffer_pool(std::make_unique<StagingBufferPool>(*device, *scheduler)),
+      presenter(*device, emu_window.GetWindowInfo().render_surface), rasterizer(gpu_) {
     LOG_WARNING(Render_Metal, "The Metal renderer is experimental: it presents guest "
                               "framebuffers but does not draw GPU-rendered graphics yet");
 }
 
 RendererMetal::~RendererMetal() = default;
+
+std::string RendererMetal::GetDeviceVendor() const {
+    return device->GetName();
+}
 
 bool RendererMetal::ReadFramebuffer(const Tegra::FramebufferConfig& framebuffer,
                                     std::vector<u8>& pixels, Presenter::Layer& layer) {
@@ -162,6 +170,10 @@ void RendererMetal::Composite(std::span<const Tegra::FramebufferConfig> framebuf
             layers.push_back(layer);
         }
     }
+
+    // Submit this frame's transfers ahead of the present, which uses the same queue.
+    scheduler->Flush();
+    staging_buffer_pool->TickFrame();
 
     const auto& layout = render_window.GetFramebufferLayout();
     const bool vsync = Settings::values.vsync_mode.GetValue() != Settings::VSyncMode::Immediate;

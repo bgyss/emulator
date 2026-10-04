@@ -13,7 +13,9 @@
 
 namespace Metal {
 
-/// Owns the Metal device and presents to a CAMetalLayer. Kept free of Objective-C types so it can
+class Device;
+
+/// Presents to a CAMetalLayer. Kept free of Objective-C types so it can
 /// be used from plain C++; the implementation lives in mtl_presenter.mm.
 class Presenter {
 public:
@@ -42,8 +44,8 @@ public:
     };
 
     /// @param layer CAMetalLayer to present to, or nullptr to run headless.
-    /// @throws std::runtime_error when no Metal device is available or setup fails.
-    explicit Presenter(void* layer);
+    /// @throws std::runtime_error when the present pipelines can't be created.
+    explicit Presenter(const Device& device, void* layer);
     ~Presenter();
 
     Presenter(const Presenter&) = delete;
@@ -53,8 +55,6 @@ public:
     /// layout's screen rectangle, and presents it.
     void Present(std::span<const Layer> layers, const Layout::FramebufferLayout& layout, float red,
                  float green, float blue, bool vsync, bool linear_filter);
-
-    [[nodiscard]] std::string GetDeviceName() const;
 
 private:
     struct Impl;
