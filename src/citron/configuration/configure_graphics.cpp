@@ -76,8 +76,7 @@ ConfigureGraphics::ConfigureGraphics(
     PopulateVSyncModeSelection(false); //< must happen after UpdateAPILayout
 
     // VSync setting needs to be determined after populating the VSync combobox
-    const auto vsync_mode_setting = Settings::values.vsync_mode.GetValue();
-    const auto vsync_mode = VSyncSettingToMode(vsync_mode_setting);
+    const auto vsync_mode = Settings::values.vsync_mode.GetValue();
     int index{};
     for (const auto mode : vsync_mode_combobox_enum_map) {
         if (mode == vsync_mode) {
