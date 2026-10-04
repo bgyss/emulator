@@ -57,6 +57,7 @@ mise run build -- --lto
 |`--lto` / `--no-lto`                        |off           |
 |`--tests`                                   |off           |
 |`--metal`                                   |off           |
+|`--asan` (AddressSanitizer; pair with `--build-dir build/asan`)|off|
 |`--jobs <n>`                                |all cores     |
 
 ## Without mise

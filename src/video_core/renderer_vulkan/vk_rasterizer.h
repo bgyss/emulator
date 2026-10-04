@@ -124,11 +124,11 @@ public:
     void TickFrame() override;
 
     // VRAM monitoring functions
-    u64 GetTotalVram() const;
-    u64 GetUsedVram() const;
-    u64 GetBufferMemoryUsage() const;
-    u64 GetTextureMemoryUsage() const;
-    u64 GetStagingMemoryUsage() const;
+    u64 GetTotalVram() const override;
+    u64 GetUsedVram() const override;
+    u64 GetBufferMemoryUsage() const override;
+    u64 GetTextureMemoryUsage() const override;
+    u64 GetStagingMemoryUsage() const override;
 
     bool AccelerateConditionalRendering() override;
     bool AccelerateSurfaceCopy(const Tegra::Engines::Fermi2D::Surface& src,

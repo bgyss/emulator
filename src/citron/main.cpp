@@ -367,6 +367,11 @@ GMainWindow::GMainWindow(std::unique_ptr<QtConfig> config_, bool has_broken_vulk
     SetupSigInterrupts();
     SetGamemodeEnabled(Settings::values.enable_gamemode.GetValue());
 #endif
+    // Give the system our filesystem before Initialize() creates its own. Files opened through
+    // a RealVfsFilesystem keep a reference to it, so if the system used a private one until
+    // LoadROM swapped in ours, anything opened before the first boot (e.g. external content
+    // refreshed from the settings dialog) would read through a destroyed filesystem.
+    system->SetFilesystem(vfs);
     system->Initialize();
 
     Common::Log::Initialize();
@@ -5513,111 +5518,35 @@ u64 GMainWindow::GetTotalVram() const {
     if (!system || !system->IsPoweredOn()) {
         return 0;
     }
-    try {
-        auto& gpu = system->GPU();
-        VideoCore::RendererBase& renderer = gpu.Renderer();
-        // Check if it's a Vulkan renderer
-        Vulkan::RendererVulkan* vulkan_renderer = static_cast<Vulkan::RendererVulkan*>(&renderer);
-        if (vulkan_renderer) {
-            VideoCore::RasterizerInterface* rasterizer = vulkan_renderer->ReadRasterizer();
-            Vulkan::RasterizerVulkan* vulkan_rasterizer =
-                static_cast<Vulkan::RasterizerVulkan*>(rasterizer);
-            if (vulkan_rasterizer) {
-                return vulkan_rasterizer->GetTotalVram();
-            }
-        }
-    } catch (...) {
-        // Ignore exceptions
-    }
-    return 0;
+    return system->GPU().Renderer().ReadRasterizer()->GetTotalVram();
 }
 
 u64 GMainWindow::GetUsedVram() const {
     if (!system || !system->IsPoweredOn()) {
         return 0;
     }
-    try {
-        auto& gpu = system->GPU();
-        VideoCore::RendererBase& renderer = gpu.Renderer();
-        Vulkan::RendererVulkan* vulkan_renderer = static_cast<Vulkan::RendererVulkan*>(&renderer);
-        if (vulkan_renderer) {
-            VideoCore::RasterizerInterface* rasterizer = vulkan_renderer->ReadRasterizer();
-            Vulkan::RasterizerVulkan* vulkan_rasterizer =
-                static_cast<Vulkan::RasterizerVulkan*>(rasterizer);
-            if (vulkan_rasterizer) {
-                return vulkan_rasterizer->GetUsedVram();
-            }
-        }
-    } catch (...) {
-        // Ignore exceptions
-    }
-    return 0;
+    return system->GPU().Renderer().ReadRasterizer()->GetUsedVram();
 }
 
 u64 GMainWindow::GetBufferMemoryUsage() const {
     if (!system || !system->IsPoweredOn()) {
         return 0;
     }
-    try {
-        auto& gpu = system->GPU();
-        VideoCore::RendererBase& renderer = gpu.Renderer();
-        Vulkan::RendererVulkan* vulkan_renderer = static_cast<Vulkan::RendererVulkan*>(&renderer);
-        if (vulkan_renderer) {
-            VideoCore::RasterizerInterface* rasterizer = vulkan_renderer->ReadRasterizer();
-            Vulkan::RasterizerVulkan* vulkan_rasterizer =
-                static_cast<Vulkan::RasterizerVulkan*>(rasterizer);
-            if (vulkan_rasterizer) {
-                return vulkan_rasterizer->GetBufferMemoryUsage();
-            }
-        }
-    } catch (...) {
-        // Ignore exceptions
-    }
-    return 0;
+    return system->GPU().Renderer().ReadRasterizer()->GetBufferMemoryUsage();
 }
 
 u64 GMainWindow::GetTextureMemoryUsage() const {
     if (!system || !system->IsPoweredOn()) {
         return 0;
     }
-    try {
-        auto& gpu = system->GPU();
-        VideoCore::RendererBase& renderer = gpu.Renderer();
-        Vulkan::RendererVulkan* vulkan_renderer = static_cast<Vulkan::RendererVulkan*>(&renderer);
-        if (vulkan_renderer) {
-            VideoCore::RasterizerInterface* rasterizer = vulkan_renderer->ReadRasterizer();
-            Vulkan::RasterizerVulkan* vulkan_rasterizer =
-                static_cast<Vulkan::RasterizerVulkan*>(rasterizer);
-            if (vulkan_rasterizer) {
-                return vulkan_rasterizer->GetTextureMemoryUsage();
-            }
-        }
-    } catch (...) {
-        // Ignore exceptions
-    }
-    return 0;
+    return system->GPU().Renderer().ReadRasterizer()->GetTextureMemoryUsage();
 }
 
 u64 GMainWindow::GetStagingMemoryUsage() const {
     if (!system || !system->IsPoweredOn()) {
         return 0;
     }
-    try {
-        auto& gpu = system->GPU();
-        VideoCore::RendererBase& renderer = gpu.Renderer();
-        Vulkan::RendererVulkan* vulkan_renderer = static_cast<Vulkan::RendererVulkan*>(&renderer);
-        if (vulkan_renderer) {
-            VideoCore::RasterizerInterface* rasterizer = vulkan_renderer->ReadRasterizer();
-            Vulkan::RasterizerVulkan* vulkan_rasterizer =
-                static_cast<Vulkan::RasterizerVulkan*>(rasterizer);
-            if (vulkan_rasterizer) {
-                return vulkan_rasterizer->GetStagingMemoryUsage();
-            }
-        }
-    } catch (...) {
-        // Ignore exceptions
-    }
-    return 0;
+    return system->GPU().Renderer().ReadRasterizer()->GetStagingMemoryUsage();
 }
 
 double GMainWindow::GetEmulationSpeed() const {
