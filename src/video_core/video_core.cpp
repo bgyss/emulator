@@ -29,7 +29,8 @@ std::unique_ptr<VideoCore::RendererBase> CreateRenderer(Core::System& system, Co
         return std::make_unique<Null::RendererNull>(emu_window, gpu, std::move(context));
     case Settings::RendererBackend::Metal:
 #ifdef HAS_METAL
-        return std::make_unique<Metal::RendererMetal>(emu_window, gpu, std::move(context));
+        return std::make_unique<Metal::RendererMetal>(emu_window, device_memory, gpu,
+                                                       std::move(context));
 #else
         LOG_WARNING(HW_GPU, "Metal renderer not built in, falling back to Vulkan");
         return std::make_unique<Vulkan::RendererVulkan>(emu_window, device_memory, gpu, std::move(context));
