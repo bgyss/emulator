@@ -14,6 +14,10 @@
 
 namespace Metal {
 
+class Device;
+class Scheduler;
+class StagingBufferPool;
+
 /// Experimental native Metal renderer. It presents the guest framebuffers read from guest memory;
 /// guest rendering still goes through the null rasterizer until the Metal rasterizer exists, so
 /// anything the game draws with the GPU does not show up yet.
@@ -32,9 +36,7 @@ public:
         return &rasterizer;
     }
 
-    [[nodiscard]] std::string GetDeviceVendor() const override {
-        return presenter.GetDeviceName();
-    }
+    [[nodiscard]] std::string GetDeviceVendor() const override;
 
 private:
     /// Reads a guest framebuffer into linear pixels. Returns false when it can't be read.
@@ -43,6 +45,9 @@ private:
 
     Tegra::MaxwellDeviceMemoryManager& device_memory;
     Tegra::GPU& gpu;
+    std::unique_ptr<Device> device;
+    std::unique_ptr<Scheduler> scheduler;
+    std::unique_ptr<StagingBufferPool> staging_buffer_pool;
     Presenter presenter;
     Null::RasterizerNull rasterizer;
 
