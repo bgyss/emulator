@@ -132,11 +132,12 @@ void RendererMetal::LogLayerChange(size_t index, const Tegra::FramebufferConfig&
     if (logged_layers.size() <= index) {
         logged_layers.resize(index + 1);
     }
-    std::string description = fmt::format(
-        "{}x{} stride {} format {} blending {} address {:#x}+{:#x}{}", framebuffer.width,
-        framebuffer.height, framebuffer.stride, static_cast<u32>(framebuffer.pixel_format),
-        static_cast<u32>(framebuffer.blending), framebuffer.address, framebuffer.offset,
-        readable ? "" : " (not readable)");
+    // The offset is left out: games flip between buffers in the same allocation every frame.
+    std::string description = fmt::format("{}x{} stride {} format {} blending {} address {:#x}{}",
+                                          framebuffer.width, framebuffer.height, framebuffer.stride,
+                                          static_cast<u32>(framebuffer.pixel_format),
+                                          static_cast<u32>(framebuffer.blending),
+                                          framebuffer.address, readable ? "" : " (not readable)");
     if (logged_layers[index] != description) {
         LOG_WARNING(Render_Metal, "Layer {}: {}", index, description);
         logged_layers[index] = std::move(description);
