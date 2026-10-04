@@ -37,11 +37,13 @@ if (CITRON_ENABLE_METAL)
         video_core/metal_buffer_cache.mm
         video_core/metal_scheduler.mm
         video_core/metal_shader_translator.mm
+        video_core/metal_texture_cache.mm
     )
     set_source_files_properties(
         video_core/metal_buffer_cache.mm
         video_core/metal_scheduler.mm
         video_core/metal_shader_translator.mm
+        video_core/metal_texture_cache.mm
         PROPERTIES
         LANGUAGE CXX
         COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc"

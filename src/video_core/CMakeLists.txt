@@ -306,6 +306,8 @@ target_link_libraries(video_core PRIVATE sirit Vulkan::Headers Vulkan::UtilityHe
 
 if (CITRON_ENABLE_METAL)
     target_sources(video_core PRIVATE
+        renderer_metal/maxwell_to_mtl.h
+        renderer_metal/maxwell_to_mtl.mm
         renderer_metal/mtl_buffer_cache.h
         renderer_metal/mtl_buffer_cache.mm
         renderer_metal/mtl_buffer_cache_base.mm
@@ -319,6 +321,9 @@ if (CITRON_ENABLE_METAL)
         renderer_metal/mtl_shader_translator.h
         renderer_metal/mtl_staging_buffer_pool.h
         renderer_metal/mtl_staging_buffer_pool.mm
+        renderer_metal/mtl_texture_cache.h
+        renderer_metal/mtl_texture_cache.mm
+        renderer_metal/mtl_texture_cache_base.mm
         renderer_metal/renderer_metal.h
         renderer_metal/renderer_metal.mm
     )
@@ -326,12 +331,15 @@ if (CITRON_ENABLE_METAL)
     # Compile the Objective-C++ files as CXX with -x instead of enabling the OBJCXX language:
     # enabling it project-wide makes CMake build SDL's .m files as Objective-C++.
     set_source_files_properties(
+        renderer_metal/maxwell_to_mtl.mm
         renderer_metal/mtl_buffer_cache.mm
         renderer_metal/mtl_buffer_cache_base.mm
         renderer_metal/mtl_device.mm
         renderer_metal/mtl_presenter.mm
         renderer_metal/mtl_scheduler.mm
         renderer_metal/mtl_staging_buffer_pool.mm
+        renderer_metal/mtl_texture_cache.mm
+        renderer_metal/mtl_texture_cache_base.mm
         renderer_metal/renderer_metal.mm
         PROPERTIES
         LANGUAGE CXX
