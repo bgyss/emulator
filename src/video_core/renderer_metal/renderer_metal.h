@@ -46,6 +46,11 @@ private:
     Presenter presenter;
     Null::RasterizerNull rasterizer;
 
+    /// Logs a layer's configuration when it differs from the previous frame's.
+    void LogLayerChange(size_t index, const Tegra::FramebufferConfig& framebuffer, bool readable);
+
+    /// Last logged configuration of each layer, to log only when it changes.
+    std::vector<std::string> logged_layers;
     /// Linear RGBA8/BGRA8 pixels of each layer, reused across frames.
     std::vector<std::vector<u8>> layer_pixels;
     /// Unswizzled R5G6B5 pixels before expansion to RGBA8.

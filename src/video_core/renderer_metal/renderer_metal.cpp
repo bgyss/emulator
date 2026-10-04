@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <string>
+
+#include <fmt/format.h>
 
 #include "common/logging.h"
 #include "common/settings.h"
@@ -124,6 +127,22 @@ bool RendererMetal::ReadFramebuffer(const Tegra::FramebufferConfig& framebuffer,
     return true;
 }
 
+void RendererMetal::LogLayerChange(size_t index, const Tegra::FramebufferConfig& framebuffer,
+                                   bool readable) {
+    if (logged_layers.size() <= index) {
+        logged_layers.resize(index + 1);
+    }
+    std::string description = fmt::format(
+        "{}x{} stride {} format {} blending {} address {:#x}+{:#x}{}", framebuffer.width,
+        framebuffer.height, framebuffer.stride, static_cast<u32>(framebuffer.pixel_format),
+        static_cast<u32>(framebuffer.blending), framebuffer.address, framebuffer.offset,
+        readable ? "" : " (not readable)");
+    if (logged_layers[index] != description) {
+        LOG_WARNING(Render_Metal, "Layer {}: {}", index, description);
+        logged_layers[index] = std::move(description);
+    }
+}
+
 void RendererMetal::Composite(std::span<const Tegra::FramebufferConfig> framebuffers) {
     if (framebuffers.empty()) {
         return;
@@ -136,7 +155,9 @@ void RendererMetal::Composite(std::span<const Tegra::FramebufferConfig> framebuf
     layers.reserve(framebuffers.size());
     for (size_t i = 0; i < framebuffers.size(); ++i) {
         Presenter::Layer layer;
-        if (ReadFramebuffer(framebuffers[i], layer_pixels[i], layer)) {
+        const bool readable = ReadFramebuffer(framebuffers[i], layer_pixels[i], layer);
+        LogLayerChange(i, framebuffers[i], readable);
+        if (readable) {
             layers.push_back(layer);
         }
     }
