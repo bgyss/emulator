@@ -367,6 +367,11 @@ GMainWindow::GMainWindow(std::unique_ptr<QtConfig> config_, bool has_broken_vulk
     SetupSigInterrupts();
     SetGamemodeEnabled(Settings::values.enable_gamemode.GetValue());
 #endif
+    // Give the system our filesystem before Initialize() creates its own. Files opened through
+    // a RealVfsFilesystem keep a reference to it, so if the system used a private one until
+    // LoadROM swapped in ours, anything opened before the first boot (e.g. external content
+    // refreshed from the settings dialog) would read through a destroyed filesystem.
+    system->SetFilesystem(vfs);
     system->Initialize();
 
     Common::Log::Initialize();
