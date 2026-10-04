@@ -18,7 +18,7 @@ class QPushButton;
 class QTimer;
 namespace InputCommon { class InputSubsystem; }
 namespace Core { class System; }
-namespace VkDeviceInfo { class Record; }
+namespace VideoCore { struct HostDeviceRecord; }
 namespace Ui { class ConfigureDialog; }
 class ConfigureApplets;
 class ConfigureAudio;
@@ -45,7 +45,7 @@ class ConfigureDialog final : public QDialog {
 public:
     explicit ConfigureDialog(QWidget* parent, HotkeyRegistry& registry,
                              InputCommon::InputSubsystem* input_subsystem,
-                             std::vector<VkDeviceInfo::Record>& vk_device_records,
+                             std::vector<VideoCore::HostDeviceRecord>& vk_device_records,
                              Core::System& system, bool enable_web_config);
 
     ~ConfigureDialog() override;

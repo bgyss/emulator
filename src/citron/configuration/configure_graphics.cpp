@@ -29,14 +29,12 @@
 #include <qcoreevent.h>
 #include <qglobal.h>
 #include <qgridlayout.h>
-#include <vulkan/vulkan_core.h>
 
 #include "citron/configuration/configuration_shared.h"
 #include "citron/configuration/configure_graphics.h"
 #include "citron/configuration/shared_widget.h"
 #include "citron/qt_common.h"
 #include "citron/uisettings.h"
-#include "citron/vk_device_info.h"
 #include "common/common_types.h"
 #include "common/dynamic_library.h"
 #include "common/logging.h"
@@ -45,42 +43,11 @@
 #include "core/core.h"
 #include "ui_configure_graphics.h"
 
-static const std::vector<VkPresentModeKHR> default_present_modes{VK_PRESENT_MODE_IMMEDIATE_KHR,
-                                                                 VK_PRESENT_MODE_FIFO_KHR};
-
-// Converts a setting to a present mode (or vice versa)
-static constexpr VkPresentModeKHR VSyncSettingToMode(Settings::VSyncMode mode) {
-    switch (mode) {
-    case Settings::VSyncMode::Immediate:
-        return VK_PRESENT_MODE_IMMEDIATE_KHR;
-    case Settings::VSyncMode::Mailbox:
-        return VK_PRESENT_MODE_MAILBOX_KHR;
-    case Settings::VSyncMode::Fifo:
-        return VK_PRESENT_MODE_FIFO_KHR;
-    case Settings::VSyncMode::FifoRelaxed:
-        return VK_PRESENT_MODE_FIFO_RELAXED_KHR;
-    default:
-        return VK_PRESENT_MODE_FIFO_KHR;
-    }
-}
-
-static constexpr Settings::VSyncMode PresentModeToSetting(VkPresentModeKHR mode) {
-    switch (mode) {
-    case VK_PRESENT_MODE_IMMEDIATE_KHR:
-        return Settings::VSyncMode::Immediate;
-    case VK_PRESENT_MODE_MAILBOX_KHR:
-        return Settings::VSyncMode::Mailbox;
-    case VK_PRESENT_MODE_FIFO_KHR:
-        return Settings::VSyncMode::Fifo;
-    case VK_PRESENT_MODE_FIFO_RELAXED_KHR:
-        return Settings::VSyncMode::FifoRelaxed;
-    default:
-        return Settings::VSyncMode::Fifo;
-    }
-}
+static const std::vector<Settings::VSyncMode> default_present_modes{Settings::VSyncMode::Immediate,
+                                                                   Settings::VSyncMode::Fifo};
 
 ConfigureGraphics::ConfigureGraphics(
-    const Core::System& system_, std::vector<VkDeviceInfo::Record>& records_,
+    const Core::System& system_, std::vector<VideoCore::HostDeviceRecord>& records_,
     const std::function<void()>& expose_compute_option_,
     const std::function<void(Settings::AspectRatio, Settings::ResolutionSetup)>&
         update_aspect_ratio_,
@@ -180,10 +147,9 @@ void ConfigureGraphics::PopulateVSyncModeSelection(bool use_setting) {
 
     const int current_index = //< current selected vsync mode from combobox
         vsync_mode_combobox->currentIndex();
-    const auto current_mode = //< current selected vsync mode as a VkPresentModeKHR
-        current_index == -1 || use_setting
-            ? VSyncSettingToMode(Settings::values.vsync_mode.GetValue())
-            : vsync_mode_combobox_enum_map[current_index];
+    const auto current_mode = //< current selected vsync mode
+        current_index == -1 || use_setting ? Settings::values.vsync_mode.GetValue()
+                                           : vsync_mode_combobox_enum_map[current_index];
     int index{};
     const int device{vulkan_device_combobox->currentIndex()}; //< current selected Vulkan device
 
@@ -221,8 +187,7 @@ void ConfigureGraphics::UpdateVsyncSetting() const {
         return;
     }
 
-    const auto mode = vsync_mode_combobox_enum_map[vsync_mode_combobox->currentIndex()];
-    const auto vsync_mode = PresentModeToSetting(mode);
+    const auto vsync_mode = vsync_mode_combobox_enum_map[vsync_mode_combobox->currentIndex()];
     Settings::values.vsync_mode.SetValue(vsync_mode);
 }
 
@@ -473,17 +438,17 @@ void ConfigureGraphics::Setup(const ConfigurationShared::Builder& builder) {
     }
 }
 
-const QString ConfigureGraphics::TranslateVSyncMode(VkPresentModeKHR mode,
+const QString ConfigureGraphics::TranslateVSyncMode(Settings::VSyncMode mode,
                                                     Settings::RendererBackend backend) const {
     (void)backend;
     switch (mode) {
-    case VK_PRESENT_MODE_IMMEDIATE_KHR:
+    case Settings::VSyncMode::Immediate:
         return QStringLiteral("Immediate (%1)").arg(tr("VSync Off"));
-    case VK_PRESENT_MODE_MAILBOX_KHR:
+    case Settings::VSyncMode::Mailbox:
         return QStringLiteral("Mailbox (%1)").arg(tr("Recommended"));
-    case VK_PRESENT_MODE_FIFO_KHR:
+    case Settings::VSyncMode::Fifo:
         return QStringLiteral("FIFO (%1)").arg(tr("VSync On"));
-    case VK_PRESENT_MODE_FIFO_RELAXED_KHR:
+    case Settings::VSyncMode::FifoRelaxed:
         return QStringLiteral("FIFO Relaxed");
     default:
         return {};
@@ -571,7 +536,7 @@ void ConfigureGraphics::RetrieveVulkanDevices() {
     device_present_modes.reserve(records.size());
     for (const auto& record : records) {
         vulkan_devices.push_back(QString::fromStdString(record.name));
-        device_present_modes.push_back(record.vsync_support);
+        device_present_modes.push_back(record.vsync_modes);
 
         if (record.has_broken_compute) {
             expose_compute_option();

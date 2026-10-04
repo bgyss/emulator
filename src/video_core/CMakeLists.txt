@@ -99,6 +99,8 @@ add_library(video_core STATIC
     gpu_thread.h
     guest_memory.h
     host_api_error.h
+    host_device_info.cpp
+    host_device_info.h
     invalidation_accumulator.h
     memory_manager.cpp
     memory_manager.h

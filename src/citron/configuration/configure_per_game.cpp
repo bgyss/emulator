@@ -102,7 +102,7 @@ static bool GameIsDarkMode() {
 }
 
 ConfigurePerGame::ConfigurePerGame(QWidget* parent, u64 title_id_, const std::string& file_name_,
-                                   std::vector<VkDeviceInfo::Record>& vk_device_records,
+                                   std::vector<VideoCore::HostDeviceRecord>& vk_device_records,
                                    Core::System& system_)
     : QDialog(parent), ui(std::make_unique<Ui::ConfigurePerGame>()), title_id{title_id_},
       file_name{file_name_}, scene{nullptr}, system{system_},
