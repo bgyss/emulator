@@ -44,7 +44,7 @@ How the macOS build differs at runtime:
 
 The frontends sit on top of a shared core:
 
-- `src/citron/` is the Qt desktop frontend (main window, configuration UI, Qt applets). `src/citron_cmd/` is the SDL2 command-line frontend. `src/android/` and `src/ios/` are the mobile frontends. `src/frontend_common/` holds config shared by all of them.
+- `src/citron/` is the Qt desktop frontend (main window, configuration UI, Qt applets). `src/citron_cmd/` is the SDL3 command-line frontend. `src/android/` and `src/ios/` are the mobile frontends. `src/frontend_common/` holds config shared by all of them.
 - `src/core/` is the emulated console:
   - `core.cpp` owns `System`.
   - `hle/kernel/` reimplements the Horizon OS kernel: processes, threads, SVCs and memory.

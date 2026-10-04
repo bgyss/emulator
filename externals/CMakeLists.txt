@@ -82,25 +82,19 @@ if (ENABLE_LIBUSB AND NOT TARGET libusb::usb)
     add_subdirectory(libusb)
 endif()
 
-# SDL2
-if (CITRON_USE_EXTERNAL_SDL2 AND NOT TARGET SDL2::SDL2 AND NOT TARGET SDL2-static)
+# SDL3
+if (CITRON_USE_EXTERNAL_SDL3 AND NOT TARGET SDL3::SDL3 AND NOT TARGET SDL3-static)
     if (NOT WIN32)
-        # Citron itself needs: Atomic Audio Events Joystick Haptic Sensor Threads Timers
-        # Since 2.0.18 Atomic+Threads required for HIDAPI/libusb (see https://github.com/libsdl-org/SDL/issues/5095)
+        # Citron itself needs: Audio Events Joystick Haptic Sensor Threads Timers HIDAPI
         # Citron-cmd also needs: Video (depends on Loadso/Dlopen)
-        # CPUinfo also required for SDL Audio, at least until 2.28.0 (see https://github.com/libsdl-org/SDL/issues/7809)
         set(SDL_UNUSED_SUBSYSTEMS
-            File Filesystem
-            Locale Power Render)
+            Camera Dialog Gpu Power Render)
         foreach(_SUB ${SDL_UNUSED_SUBSYSTEMS})
           string(TOUPPER ${_SUB} _OPT)
           set(SDL_${_OPT} OFF)
         endforeach()
 
-        set(HIDAPI ON)
-    endif()
-    if (APPLE)
-        set(SDL_FILE ON)
+        set(SDL_HIDAPI ON)
     endif()
 
     add_subdirectory(SDL)

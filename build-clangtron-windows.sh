@@ -707,7 +707,7 @@ stage_setup() {
             mingw-w64-clang-x86_64-ninja \
             mingw-w64-clang-x86_64-python \
             mingw-w64-clang-x86_64-boost \
-            mingw-w64-clang-x86_64-SDL2 \
+            mingw-w64-clang-x86_64-SDL3 \
             mingw-w64-clang-x86_64-nasm \
             mingw-w64-clang-x86_64-yasm \
             mingw-w64-clang-x86_64-glslang \
@@ -1545,11 +1545,11 @@ set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE BOTH)
 
 # -D__INTRINSIC_DEFINED___cpuidex: prevents MinGW intrin-impl.h from defining __cpuidex
-# with external linkage, eliminating duplicate-symbol errors from SDL2 and others.
+# with external linkage, eliminating duplicate-symbol errors from SDL3 and others.
 set(CMAKE_C_FLAGS_INIT   "-D__INTRINSIC_DEFINED___cpuidex -D__USE_MINGW_STAT64 -isystem \"${CMAKE_BUILD_ROOT}/mingw-case-fixups\" -Wno-unknown-pragmas")
 set(CMAKE_CXX_FLAGS_INIT "-D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -D__INTRINSIC_DEFINED___cpuidex -D__USE_MINGW_STAT64 -U__GLIBCXX__ -isystem \"${CMAKE_BUILD_ROOT}/mingw-case-fixups\" -Wno-unknown-pragmas")
 
-# --allow-multiple-definition: residual __cpuidex duplicates from libSDL2.a
+# --allow-multiple-definition: residual __cpuidex duplicates from libSDL3.a
 set(CMAKE_EXE_LINKER_FLAGS_INIT    "-Wl,--allow-multiple-definition")
 set(CMAKE_SHARED_LINKER_FLAGS_INIT "-Wl,--allow-multiple-definition")
 set(CMAKE_MODULE_LINKER_FLAGS_INIT "-Wl,--allow-multiple-definition")
@@ -1603,7 +1603,7 @@ build_common_cmake_args() {
         "-DCITRON_TESTS=OFF"
         "-DCITRON_USE_BUNDLED_FFMPEG=ON"
         "-DCITRON_CLANGTRON=ON"
-        "-DCITRON_USE_EXTERNAL_SDL2=ON"
+        "-DCITRON_USE_EXTERNAL_SDL3=ON"
         "-DCITRON_USE_EXTERNAL_VULKAN_HEADERS=ON"
         "-DCITRON_USE_EXTERNAL_VULKAN_UTILITY_LIBRARIES=ON"
         "-DSPIRV-Headers_DIR=${CMAKE_SPIRV_HEADERS_INSTALL}/share/cmake/SPIRV-Headers"
@@ -2876,7 +2876,7 @@ XBYAK_PATCH_EOF
         $([ "${_elf_nopgo}" -eq 0 ] && echo "-DCITRON_PGO_PROFILE_DIR=${PROFILE_DIR}")
         "-DCITRON_TESTS=OFF"
         "-DCITRON_USE_BUNDLED_FFMPEG=ON"
-        "-DCITRON_USE_EXTERNAL_SDL2=ON"
+        "-DCITRON_USE_EXTERNAL_SDL3=ON"
         "-DCITRON_USE_EXTERNAL_VULKAN_HEADERS=ON"
         "-DCITRON_USE_EXTERNAL_VULKAN_UTILITY_LIBRARIES=ON"
         "-DCITRON_USE_QT_MULTIMEDIA=OFF"

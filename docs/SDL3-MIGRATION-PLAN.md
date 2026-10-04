@@ -19,16 +19,43 @@ scope.
 | Qt frontend | `src/citron/main.cpp` (screensaver inhibit and hints only) | Small |
 | Build | root `CMakeLists.txt`, `CMakeModules/dependencies.cmake`, `externals/CMakeLists.txt`, `CopyCitronSDLDeps.cmake`, `src/*/CMakeLists.txt`, the MinGW cross files, `build-*.sh` | Medium |
 
-## Phase 0: decisions to confirm
+## Phase 0: decisions (settled)
 
-1. **Hard cut or dual-support?** Recommended: hard cut to SDL3. Keeping both
-   would need a shim header (SDL ships `sdl2-compat` and `SDL_migration`) and
-   doubles testing. Dual support only makes sense if distro packaging forces it.
-2. **Version.** Pin the latest stable SDL3 release in CPM. Confirm the exact
-   tag at implementation time.
-3. **Rename the option.** `ENABLE_SDL2`, `CITRON_USE_EXTERNAL_SDL2` and
-   `HAVE_SDL2` become `*_SDL3`. This also touches the build scripts, docs and
-   the Android gradle flag.
+1. **Hard cut to SDL3.** No SDL2 compatibility shim; the SDL2 code paths are removed.
+2. **Version: `release-3.4.18`**, built from source through CPM as a static library on every
+   desktop toolchain (including MSVC, which no longer uses prebuilt bundled SDL2 binaries).
+3. **Options renamed**: `ENABLE_SDL2` -> `ENABLE_SDL3`, `CITRON_USE_EXTERNAL_SDL2` ->
+   `CITRON_USE_EXTERNAL_SDL3`, `HAVE_SDL2` -> `HAVE_SDL3`. `CITRON_USE_BUNDLED_SDL2` and
+   `CopyCitronSDLDeps.cmake` are removed.
+
+Backward compatibility kept on purpose:
+
+- The saved audio engine value `"sdl2"` still loads (mapped to the SDL3 sink); new configs write
+  `"sdl3"`.
+- The CLI config file keeps its `sdl2-config.ini` name so existing settings are not lost.
+
+## Implementation status
+
+Done (syntax-checked against the SDL3 3.4.18 headers; not yet built or run end to end):
+
+- Build system: CMake, CPM pin, externals, MinGW cross files, Windows script package name.
+- Audio sink rewritten on `SDL_OpenAudioDeviceStream`.
+- `citron-cmd` window: new event model, fullscreen modes, window properties for the Vulkan
+  surface, IO streams for the icon.
+- Input driver: `SDL_Gamepad` API, ID-based enumeration, binding lookup via
+  `SDL_GetGamepadBindings`, new battery and sensor events, updated hints.
+- Joy-Con HID code and Qt `main.cpp`: include paths only (the `SDL_hid_*` and screensaver APIs
+  are unchanged).
+
+Not done / needs a human with hardware or a full toolchain:
+
+- Full builds on Linux, Windows (clang-cl and llvm-mingw) and macOS, and the Catch2 suite.
+- Controller testing (see Phase 3), audio latency/underrun testing, window behaviour on
+  X11/Wayland/Windows/macOS.
+- `build-citron-linux.sh` still carries SDL2-specific comments about configure-time checks
+  (`Xext.h`, ALSA/Pulse); they need re-verifying against SDL3's CMake.
+- The Windows script's duplicate-symbol linker workarounds (`__cpuidex`,
+  `--allow-multiple-definition`, the `SDL_*_REAL` strip regex) may no longer be needed.
 
 ## Phase 1: build system
 
