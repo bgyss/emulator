@@ -24,8 +24,6 @@
 #include "core/core.h"
 #include "video_core/gpu.h"
 #include "video_core/renderer_base.h"
-#include "video_core/renderer_vulkan/renderer_vulkan.h"
-#include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "common/settings.h"
 
 VramOverlay::VramOverlay(QWidget* parent) : QWidget(UISettings::IsGamescope() ? nullptr : parent) {

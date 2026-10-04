@@ -108,8 +108,8 @@ namespace Ui {
 class MainWindow;
 }
 enum class EmulatedDirectoryTarget { NAND, SDMC };
-namespace VkDeviceInfo {
-class Record;
+namespace VideoCore {
+struct HostDeviceRecord;
 }
 
 class VolumeButton : public QPushButton {
@@ -439,7 +439,7 @@ private:
     VramOverlay* vram_overlay{};
     ControllerOverlay* controller_overlay{};
     GameListPlaceholder* game_list_placeholder;
-    std::vector<VkDeviceInfo::Record> vk_device_records;
+    std::vector<VideoCore::HostDeviceRecord> vk_device_records;
     QLabel* message_label = nullptr;
     QLabel* shader_building_label = nullptr;
     QLabel* res_scale_label = nullptr;

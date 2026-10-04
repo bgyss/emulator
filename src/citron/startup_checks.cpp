@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: Copyright 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "video_core/vulkan_common/vulkan_wrapper.h"
-
 #ifdef _WIN32
 #include <cstring>
 #include <processthreadsapi.h>
@@ -17,20 +15,14 @@
 #endif
 
 #include <fmt/format.h>
-#include "video_core/vulkan_common/vulkan_instance.h"
-#include "video_core/vulkan_common/vulkan_library.h"
+#include "common/settings_enums.h"
+#include "video_core/host_device_info.h"
 #include "citron/startup_checks.h"
 
 void CheckVulkan() {
     // Just start the Vulkan loader, this will crash if something is wrong
-    try {
-        Vulkan::vk::InstanceDispatch dld;
-        const auto library = Vulkan::OpenLibrary();
-        const Vulkan::vk::Instance instance =
-            Vulkan::CreateInstance(*library, dld, VK_API_VERSION_1_1);
-
-    } catch (const Vulkan::vk::Exception& exception) {
-        fmt::print(stderr, "Failed to initialize Vulkan: {}\n", exception.what());
+    if (const auto error = VideoCore::CheckHostApi(Settings::RendererBackend::Vulkan)) {
+        fmt::print(stderr, "Failed to initialize Vulkan: {}\n", *error);
     }
 }
 

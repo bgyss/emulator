@@ -60,7 +60,7 @@ class ConfigurePerGame : public QDialog {
 
 public:
     explicit ConfigurePerGame(QWidget* parent, u64 title_id_, const std::string& file_name_,
-                              std::vector<VkDeviceInfo::Record>& vk_device_records,
+                              std::vector<VideoCore::HostDeviceRecord>& vk_device_records,
                               Core::System& system_);
     ~ConfigurePerGame() override;
 

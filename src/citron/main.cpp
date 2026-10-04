@@ -190,9 +190,8 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include "ui_main.h"
 #include "util/overlay_dialog.h"
 #include "video_core/gpu.h"
+#include "video_core/rasterizer_interface.h"
 #include "video_core/renderer_base.h"
-#include "video_core/renderer_vulkan/renderer_vulkan.h"
-#include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/shader_notify.h"
 
 #include "citron/util/clickable_label.h"

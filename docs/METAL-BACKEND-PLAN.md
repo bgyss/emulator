@@ -1,6 +1,6 @@
 # Native Metal Backend Plan
 
-Status as of 2026-10-04. Phase 0 is done except the last item; Phases 1–4 are not started.
+Status as of 2026-10-04. Phase 0 is done; Phases 1–4 are not started.
 
 A native Metal renderer for Citron Neo mirrors about 26k lines of Vulkan-specific code (`renderer_vulkan/`, `vulkan_common/` and the SPIR-V shader backend); the emulation core and GPU caches are already backend-agnostic.
 
@@ -30,7 +30,7 @@ Four seams already exist, so the work is adding a backend, not restructuring the
 | Shader IR | `shader_recompiler/` frontend, IR and `ir_opt/` | Everything up to emission is shared; `Profile`/`HostTranslateInfo` carry host quirk flags |
 | Metal layer | `citron/qt_common.cpp` (`CAMetalLayer`, `WindowSystemType::Cocoa`), `ios/App/RenderView.swift` | Both frontends already own a `CAMetalLayer` to hand the renderer |
 
-## Phase 0: groundwork (mostly done, verified on Apple Silicon)
+## Phase 0: groundwork (done, verified on Apple Silicon)
 
 Phase 0 makes Metal a selectable backend that boots to a cleared, presented screen, without touching emulation. Seven of eight items landed in bgyss/emulator#2, with build fixes in #3 and #4.
 
@@ -41,9 +41,9 @@ Phase 0 makes Metal a selectable backend that boots to a cleared, presented scre
 - [x] Settings UI: list Metal on Apple builds; hide Vulkan-only options (device, present modes) when it is selected
 - [x] Remove the `vk::Exception` dependency from `video_core/gpu_thread.cpp`
 - [x] Hand the `CAMetalLayer` to the renderer through `WindowSystemInfo`
-- [ ] Put the frontend's direct Vulkan calls (startup checks, device info, VRAM overlay) behind a backend-neutral interface
+- [x] Put the frontend's direct Vulkan calls (startup checks, device info, VRAM overlay) behind a backend-neutral interface (`video_core/host_device_info.h`)
 
-The `CAMetalLayer` item also fixed a bug: the SDL frontend passed an `NSView` where a `CAMetalLayer` was expected. The last item is in progress.
+The `CAMetalLayer` item also fixed a bug: the SDL frontend passed an `NSView` where a `CAMetalLayer` was expected.
 
 Verified 2026-10-04 on Apple Silicon: with Metal selected, a game boots to a black window with audio and the log shows the `Render.Metal` warning. Booting right after clicking OK in Configure aborted in `RealVfsFilesystem::RefreshReference` during game loading. It was a bug in existing code, not Metal: the system's private filesystem was freed while update files still referenced it. Fixed in bgyss/emulator#4, and an AddressSanitizer build on Apple Silicon showed no memory errors.
 

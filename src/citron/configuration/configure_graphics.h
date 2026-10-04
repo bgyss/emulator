@@ -13,12 +13,11 @@
 #include <QString>
 #include <QWidget>
 #include <qobjectdefs.h>
-#include <vulkan/vulkan_core.h>
 #include "citron/configuration/configuration_shared.h"
 #include "common/common_types.h"
 #include "common/settings_enums.h"
 #include "configuration/shared_translation.h"
-#include "vk_device_info.h"
+#include "video_core/host_device_info.h"
 
 class QPushButton;
 class QEvent;
@@ -47,7 +46,7 @@ class ConfigureGraphics : public ConfigurationShared::Tab {
 
 public:
     explicit ConfigureGraphics(
-        const Core::System& system_, std::vector<VkDeviceInfo::Record>& records_,
+        const Core::System& system_, std::vector<VideoCore::HostDeviceRecord>& records_,
         const std::function<void()>& expose_compute_option_,
         const std::function<void(Settings::AspectRatio, Settings::ResolutionSetup)>&
             update_aspect_ratio_,
@@ -73,9 +72,8 @@ private:
 
     void RetrieveVulkanDevices();
 
-    /* Turns a Vulkan present mode into a textual string for a UI
-     * (and eventually for a human to read) */
-    const QString TranslateVSyncMode(VkPresentModeKHR mode,
+    /// Turns a VSync mode into a textual string for the UI
+    const QString TranslateVSyncMode(Settings::VSyncMode mode,
                                      Settings::RendererBackend backend) const;
 
     Settings::RendererBackend GetCurrentGraphicsBackend() const;
@@ -87,11 +85,11 @@ private:
 
     std::vector<std::function<void(bool)>> apply_funcs{};
 
-    std::vector<VkDeviceInfo::Record>& records;
+    std::vector<VideoCore::HostDeviceRecord>& records;
     std::vector<QString> vulkan_devices;
-    std::vector<std::vector<VkPresentModeKHR>> device_present_modes;
-    std::vector<VkPresentModeKHR>
-        vsync_mode_combobox_enum_map{}; //< Keeps track of which present mode corresponds to which
+    std::vector<std::vector<Settings::VSyncMode>> device_present_modes;
+    std::vector<Settings::VSyncMode>
+        vsync_mode_combobox_enum_map{}; //< Keeps track of which VSync mode corresponds to which
                                         // selection in the combobox
     u32 vulkan_device{};
     const std::function<void()>& expose_compute_option;

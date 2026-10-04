@@ -71,7 +71,7 @@ static bool DialogIsDarkMode() {
 
 ConfigureDialog::ConfigureDialog(QWidget* parent, HotkeyRegistry& registry_,
                                  InputCommon::InputSubsystem* input_subsystem,
-                                 std::vector<VkDeviceInfo::Record>& vk_device_records,
+                                 std::vector<VideoCore::HostDeviceRecord>& vk_device_records,
                                  Core::System& system_, bool enable_web_config)
 
     : QDialog(parent), ui{std::make_unique<Ui::ConfigureDialog>()}, registry(registry_),
