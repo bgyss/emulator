@@ -10,17 +10,17 @@
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/renderer_base.h"
 #include "video_core/renderer_metal/mtl_presenter.h"
-#include "video_core/renderer_null/null_rasterizer.h"
 
 namespace Metal {
 
 class Device;
+class RasterizerMetal;
 class Scheduler;
 class StagingBufferPool;
 
-/// Experimental native Metal renderer. It presents the guest framebuffers read from guest memory;
-/// guest rendering still goes through the null rasterizer until the Metal rasterizer exists, so
-/// anything the game draws with the GPU does not show up yet.
+/// Experimental native Metal renderer. It presents framebuffers the GPU cleared or copied into
+/// straight from the texture cache, and reads the rest from guest memory. Draws are not
+/// implemented yet, so most GPU-rendered graphics don't show up.
 class RendererMetal final : public VideoCore::RendererBase {
 public:
     explicit RendererMetal(Core::Frontend::EmuWindow& emu_window,
@@ -32,9 +32,7 @@ public:
 
     std::vector<u8> GetAppletCaptureBuffer() override;
 
-    VideoCore::RasterizerInterface* ReadRasterizer() override {
-        return &rasterizer;
-    }
+    VideoCore::RasterizerInterface* ReadRasterizer() override;
 
     [[nodiscard]] std::string GetDeviceVendor() const override;
 
@@ -49,10 +47,11 @@ private:
     std::unique_ptr<Scheduler> scheduler;
     std::unique_ptr<StagingBufferPool> staging_buffer_pool;
     Presenter presenter;
-    Null::RasterizerNull rasterizer;
+    std::unique_ptr<RasterizerMetal> rasterizer;
 
     /// Logs a layer's configuration when it differs from the previous frame's.
-    void LogLayerChange(size_t index, const Tegra::FramebufferConfig& framebuffer, bool readable);
+    void LogLayerChange(size_t index, const Tegra::FramebufferConfig& framebuffer, bool readable,
+                        bool rendered);
 
     /// Last logged configuration of each layer, to log only when it changes.
     std::vector<std::string> logged_layers;

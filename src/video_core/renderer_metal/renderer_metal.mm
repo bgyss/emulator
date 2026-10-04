@@ -14,6 +14,7 @@
 #include "video_core/framebuffer_config.h"
 #include "video_core/gpu.h"
 #include "video_core/renderer_metal/mtl_device.h"
+#include "video_core/renderer_metal/mtl_rasterizer.h"
 #include "video_core/renderer_metal/mtl_scheduler.h"
 #include "video_core/renderer_metal/mtl_staging_buffer_pool.h"
 #include "video_core/renderer_metal/renderer_metal.h"
@@ -67,12 +68,18 @@ RendererMetal::RendererMetal(Core::Frontend::EmuWindow& emu_window,
     : RendererBase(emu_window, std::move(context_)), device_memory(device_memory_), gpu(gpu_),
       device(std::make_unique<Device>()), scheduler(std::make_unique<Scheduler>(*device)),
       staging_buffer_pool(std::make_unique<StagingBufferPool>(*device, *scheduler)),
-      presenter(*device, emu_window.GetWindowInfo().render_surface), rasterizer(gpu_) {
-    LOG_WARNING(Render_Metal, "The Metal renderer is experimental: it presents guest "
-                              "framebuffers but does not draw GPU-rendered graphics yet");
+      presenter(*device, emu_window.GetWindowInfo().render_surface),
+      rasterizer(std::make_unique<RasterizerMetal>(gpu_, device_memory_, *device, *scheduler,
+                                                   *staging_buffer_pool)) {
+    LOG_WARNING(Render_Metal, "The Metal renderer is experimental: it clears, copies and "
+                              "presents, but does not draw GPU-rendered graphics yet");
 }
 
 RendererMetal::~RendererMetal() = default;
+
+VideoCore::RasterizerInterface* RendererMetal::ReadRasterizer() {
+    return rasterizer.get();
+}
 
 std::string RendererMetal::GetDeviceVendor() const {
     return device->GetName();
@@ -136,16 +143,16 @@ bool RendererMetal::ReadFramebuffer(const Tegra::FramebufferConfig& framebuffer,
 }
 
 void RendererMetal::LogLayerChange(size_t index, const Tegra::FramebufferConfig& framebuffer,
-                                   bool readable) {
+                                   bool readable, bool rendered) {
     if (logged_layers.size() <= index) {
         logged_layers.resize(index + 1);
     }
     // The offset is left out: games flip between buffers in the same allocation every frame.
-    std::string description = fmt::format("{}x{} stride {} format {} blending {} address {:#x}{}",
-                                          framebuffer.width, framebuffer.height, framebuffer.stride,
-                                          static_cast<u32>(framebuffer.pixel_format),
-                                          static_cast<u32>(framebuffer.blending),
-                                          framebuffer.address, readable ? "" : " (not readable)");
+    std::string description = fmt::format(
+        "{}x{} stride {} format {} blending {} address {:#x}{}", framebuffer.width,
+        framebuffer.height, framebuffer.stride, static_cast<u32>(framebuffer.pixel_format),
+        static_cast<u32>(framebuffer.blending), framebuffer.address,
+        rendered ? " (GPU-rendered)" : (readable ? "" : " (not readable)"));
     if (logged_layers[index] != description) {
         LOG_WARNING(Render_Metal, "Layer {}: {}", index, description);
         logged_layers[index] = std::move(description);
@@ -162,18 +169,34 @@ void RendererMetal::Composite(std::span<const Tegra::FramebufferConfig> framebuf
     }
     std::vector<Presenter::Layer> layers;
     layers.reserve(framebuffers.size());
+    // Keeps the rendered textures alive until Present returns.
+    std::vector<id<MTLTexture>> rendered_textures;
     for (size_t i = 0; i < framebuffers.size(); ++i) {
+        const Tegra::FramebufferConfig& framebuffer = framebuffers[i];
         Presenter::Layer layer;
-        const bool readable = ReadFramebuffer(framebuffers[i], layer_pixels[i], layer);
-        LogLayerChange(i, framebuffers[i], readable);
+        const DAddr address = framebuffer.address + framebuffer.offset;
+        if (const auto rendered = rasterizer->AccelerateDisplay(framebuffer, address)) {
+            // The GPU rendered this framebuffer; present its texture.
+            layer.width = rendered->width;
+            layer.height = rendered->height;
+            layer.texture = (__bridge void*)rendered->texture;
+            layer.crop = Tegra::NormalizeCrop(framebuffer, rendered->width, rendered->height);
+            layer.blending = ToPresenterBlend(framebuffer.blending);
+            rendered_textures.push_back(rendered->texture);
+            LogLayerChange(i, framebuffer, true, true);
+            layers.push_back(layer);
+            continue;
+        }
+        const bool readable = ReadFramebuffer(framebuffer, layer_pixels[i], layer);
+        LogLayerChange(i, framebuffer, readable, false);
         if (readable) {
             layers.push_back(layer);
         }
     }
 
-    // Submit this frame's transfers ahead of the present, which uses the same queue.
+    // Submit this frame's rendering and transfers ahead of the present, which uses the same
+    // queue.
     scheduler->Flush();
-    staging_buffer_pool->TickFrame();
 
     const auto& layout = render_window.GetFramebufferLayout();
     const bool vsync = Settings::values.vsync_mode.GetValue() != Settings::VSyncMode::Immediate;
@@ -182,6 +205,7 @@ void RendererMetal::Composite(std::span<const Tegra::FramebufferConfig> framebuf
     presenter.Present(layers, layout, Settings::values.bg_red.GetValue() / 255.0f,
                       Settings::values.bg_green.GetValue() / 255.0f,
                       Settings::values.bg_blue.GetValue() / 255.0f, vsync, linear_filter);
+    rasterizer->TickFrame();
 
     gpu.RendererFrameEndNotify();
     render_window.OnFrameDisplayed();

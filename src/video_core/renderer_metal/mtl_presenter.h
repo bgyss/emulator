@@ -31,13 +31,18 @@ public:
         Coverage,
     };
 
-    /// One guest framebuffer layer, already converted to linear pixels.
+    /// One guest framebuffer layer: linear pixels read from guest memory, or a texture the GPU
+    /// rendered.
     struct Layer {
         u32 width{};
         u32 height{};
         LayerFormat format{};
-        /// Tightly packed rows of width * 4 bytes.
+        /// Tightly packed rows of width * 4 bytes. Ignored when texture is set.
         std::span<const u8> pixels;
+        /// An id<MTLTexture> to sample instead of uploading pixels, bridged without a retain;
+        /// the caller keeps it alive until Present returns. Present must be ordered after the
+        /// work that renders it, on the same command queue.
+        void* texture{};
         /// Normalized source rectangle; left > right or top > bottom flips the image.
         Common::Rectangle<f32> crop;
         Blend blending{};
