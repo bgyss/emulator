@@ -267,7 +267,7 @@ RasterizerMetal::RasterizerMetal(Tegra::GPU& gpu_,
       buffer_cache_runtime(device, scheduler, staging_buffer_pool),
       buffer_cache(device_memory, buffer_cache_runtime),
       pipeline_cache(device_memory, device, scheduler, buffer_cache, buffer_cache_runtime,
-                     texture_cache),
+                     texture_cache, gpu.ShaderNotify()),
       accelerate_dma(buffer_cache, texture_cache),
       fence_manager(*this, gpu, texture_cache, buffer_cache, query_cache, scheduler) {}
 
@@ -303,8 +303,11 @@ void RasterizerMetal::Draw(bool is_indexed, u32 instance_count) {
         return;
     }
 
+    const bool may_skip = pipeline_cache.MaySkipDraw(is_indexed ? draw_state.index_buffer.count
+                                                                : draw_state.vertex_buffer.count);
     std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};
-    id<MTLRenderCommandEncoder> encoder = pipeline->Configure(*maxwell3d, *gpu_memory, is_indexed);
+    id<MTLRenderCommandEncoder> encoder =
+        pipeline->Configure(*maxwell3d, *gpu_memory, is_indexed, may_skip);
     if (encoder == nil) {
         return;
     }
@@ -741,6 +744,7 @@ void RasterizerMetal::FlushCommands() {
 }
 
 void RasterizerMetal::TickFrame() {
+    pipeline_cache.TickFrame();
     fence_manager.TickFrame();
     staging_buffer_pool.TickFrame();
     {
@@ -781,6 +785,11 @@ void RasterizerMetal::AccelerateInlineToMemory(GPUVAddr address, size_t copy_siz
         texture_cache.WriteMemory(*cpu_addr, copy_size);
     }
     pipeline_cache.InvalidateRegion(*cpu_addr, copy_size);
+}
+
+void RasterizerMetal::LoadDiskResources(u64 title_id, std::stop_token stop_loading,
+                                        const VideoCore::DiskResourceLoadCallback& callback) {
+    pipeline_cache.LoadDiskResources(title_id, stop_loading, callback);
 }
 
 void RasterizerMetal::InitializeChannel(Tegra::Control::ChannelState& channel) {

@@ -118,6 +118,20 @@ public:
 
     void BarrierFeedbackLoop() {}
 
+    /// Whether texels of this data format move between textures and guest memory through
+    /// UploadDepthStencil and DownloadDepthStencil: Metal has no 24-bit depth, so it is stored as
+    /// 32-bit float, and Metal buffer copies take depth and stencil separately.
+    [[nodiscard]] static bool IsConvertedDepthStencil(PixelFormat data_format) noexcept;
+
+    /// Copies guest depth/stencil texels from a buffer into a texture, unpacking them on the GPU.
+    void UploadDepthStencil(const TextureCopyTarget& dst, id<MTLBuffer> buffer, size_t offset,
+                            std::span<const VideoCommon::BufferImageCopy> copies);
+
+    /// Copies texture texels into a buffer as guest depth/stencil texels, packing them on the
+    /// GPU.
+    void DownloadDepthStencil(const TextureCopyTarget& src, id<MTLBuffer> buffer, size_t offset,
+                              std::span<const VideoCommon::BufferImageCopy> copies);
+
     const Device& device;
     Scheduler& scheduler;
     StagingBufferPool& staging_buffer_pool;
@@ -138,10 +152,15 @@ private:
 
     id<MTLRenderPipelineState> BlitPipeline(MTLPixelFormat format, u32 kind);
 
+    id<MTLComputePipelineState> DepthStencilPipeline(bool pack);
+
     id<MTLLibrary> blit_library;
     std::unordered_map<u64, id<MTLRenderPipelineState>> blit_pipelines;
     id<MTLSamplerState> nearest_sampler;
     id<MTLSamplerState> linear_sampler;
+    id<MTLLibrary> depth_stencil_library;
+    id<MTLComputePipelineState> unpack_depth_stencil_pipeline;
+    id<MTLComputePipelineState> pack_depth_stencil_pipeline;
 };
 
 class Image : public VideoCommon::ImageBase {

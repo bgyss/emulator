@@ -4,12 +4,19 @@
 #include <TargetConditionals.h>
 
 #include <algorithm>
+#include <chrono>
+#include <fstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
+
+#include <boost/container/static_vector.hpp>
 
 #include "common/bit_cast.h"
 #include "common/cityhash.h"
+#include "common/fs/fs.h"
+#include "common/fs/path_util.h"
 #include "common/logging.h"
 #include "common/settings.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
@@ -24,6 +31,7 @@
 #include "video_core/renderer_metal/mtl_pipeline_cache.h"
 #include "video_core/renderer_metal/mtl_shader_translator.h"
 #include "video_core/shader_environment.h"
+#include "video_core/shader_notify.h"
 #include "video_core/surface.h"
 
 namespace Metal {
@@ -35,6 +43,45 @@ using Shader::Backend::SPIRV::EmitSPIRV;
 using Shader::Maxwell::ConvertLegacyToGeneric;
 using Shader::Maxwell::MergeDualVertexPrograms;
 using Shader::Maxwell::TranslateProgram;
+using VideoCommon::FileEnvironment;
+using VideoCommon::GenericEnvironment;
+
+using Clock = std::chrono::steady_clock;
+
+/// Version of the transferable pipeline cache, metal.bin. Bump it when the key changes.
+constexpr u32 PIPELINE_CACHE_VERSION = 1;
+/// Version of the pipeline state cache, metal_states.bin. Bump it when the pixel format
+/// mapping or the pipeline state descriptor changes.
+constexpr u32 STATE_CACHE_VERSION = 1;
+constexpr std::array<char, 8> STATE_CACHE_MAGIC{'c', 'i', 't', 'r', 'm', 't', 'l', 's'};
+
+/// Draws with at most this many vertices or indices wait for their pipeline even with
+/// asynchronous shaders: they are mostly full-screen passes and UI, where a skipped draw shows.
+constexpr u32 MAX_WAITING_DRAW_COUNT = 32;
+
+/// Log the pipeline summary every this many new pipelines.
+constexpr u64 STATISTICS_INTERVAL = 100;
+
+struct StateRecord {
+    u64 key_hash;
+    AttachmentFormats formats;
+};
+static_assert(std::has_unique_object_representations_v<StateRecord>);
+
+u64 ElapsedNs(Clock::time_point start) {
+    return static_cast<u64>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - start).count());
+}
+
+double Milliseconds(u64 ns) {
+    return static_cast<double>(ns) / 1'000'000.0;
+}
+
+size_t NumPipelineWorkers() {
+    // Leave a core each for the GPU thread and the CPU emulation.
+    const size_t threads = std::max<size_t>(std::thread::hardware_concurrency(), 2);
+    return std::max<size_t>(threads > 4 ? threads - 2 : threads / 2, 1);
+}
 
 // The helpers below follow the Vulkan pipeline cache.
 
@@ -166,10 +213,19 @@ Shader::RuntimeInfo MakeRuntimeInfo(const GraphicsPipelineCacheKey& key,
 PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
                              const Device& device_, Scheduler& scheduler_,
                              BufferCache& buffer_cache_, BufferCacheRuntime& buffer_cache_runtime_,
-                             TextureCache& texture_cache_)
+                             TextureCache& texture_cache_,
+                             VideoCore::ShaderNotify& shader_notify_)
     : VideoCommon::ShaderCache{device_memory_}, device{device_}, scheduler{scheduler_},
       buffer_cache{buffer_cache_}, buffer_cache_runtime{buffer_cache_runtime_},
-      texture_cache{texture_cache_} {
+      texture_cache{texture_cache_}, shader_notify{shader_notify_},
+      use_asynchronous_shaders{Settings::values.use_asynchronous_shaders.GetValue()},
+      compiler{device_}, serialization_thread(1, "MtlPipelineSerialization"),
+      workers(NumPipelineWorkers(), "MtlPipelineBuilder") {
+    compiler.workers = &workers;
+    compiler.shader_notify = &shader_notify;
+    compiler.on_state_built = [this](u64 key_hash, const AttachmentFormats& formats) {
+        SaveState(key_hash, formats);
+    };
     // What SPIR-V the shader recompiler may emit for SPIRV-Cross to translate to MSL.
     profile = Shader::Profile{
         .supported_spirv = 0x00010500,
@@ -225,7 +281,49 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
     };
 }
 
-PipelineCache::~PipelineCache() = default;
+PipelineCache::~PipelineCache() {
+    // Pipelines still compiling are dropped with the workers; finish writing the disk cache.
+    serialization_thread.WaitForRequests();
+    LogStatistics("at shutdown");
+}
+
+bool PipelineCache::MaySkipDraw(u32 vertex_or_index_count) const noexcept {
+    return use_asynchronous_shaders && vertex_or_index_count > MAX_WAITING_DRAW_COUNT;
+}
+
+void PipelineCache::TickFrame() {
+    const PipelineStatistics& stats = compiler.Statistics();
+    const u64 count = stats.pipelines_built + stats.pipelines_failed;
+    if (count >= logged_pipeline_count + STATISTICS_INTERVAL) {
+        logged_pipeline_count = count;
+        LogStatistics("so far");
+    }
+}
+
+void PipelineCache::LogStatistics(const char* when) {
+    const PipelineStatistics& stats = compiler.Statistics();
+    const u64 built = stats.pipelines_built;
+    if (built == 0 && stats.pipelines_failed == 0) {
+        return;
+    }
+    const u64 functions = std::max<u64>(stats.functions_compiled, 1);
+    const u64 states = std::max<u64>(stats.states_built, 1);
+    const u64 pipelines = std::max<u64>(built + stats.pipelines_failed, 1);
+    LOG_INFO(Render_Metal,
+             "Pipelines {}: {} built ({} from the disk cache), {} failed; {} Metal functions "
+             "compiled, {} shared; {} pipeline states. Average per pipeline: recompile {:.1f} ms; "
+             "per function: MSL translation {:.1f} ms, Metal compile {:.1f} ms; per state: "
+             "{:.1f} ms. The GPU thread waited {:.0f} ms in total (longest {:.0f} ms); {} draws "
+             "skipped while compiling",
+             when, built, stats.pipelines_loaded.load(), stats.pipelines_failed.load(),
+             stats.functions_compiled.load(), stats.functions_shared.load(),
+             stats.states_built.load(), Milliseconds(stats.recompile_ns) / pipelines,
+             Milliseconds(stats.translate_ns) /
+                 std::max<u64>(stats.functions_compiled + stats.functions_shared, 1),
+             Milliseconds(stats.compile_ns) / functions, Milliseconds(stats.state_ns) / states,
+             Milliseconds(stats.wait_ns), Milliseconds(stats.max_wait_ns),
+             stats.draws_skipped.load());
+}
 
 GraphicsPipeline* PipelineCache::CurrentGraphicsPipeline() {
     if (!RefreshStages(graphics_key.unique_hashes)) {
@@ -236,29 +334,140 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipeline() {
                            [](const auto& stream) { return static_cast<u16>(stream.stride); });
     const auto [it, is_new] = graphics_cache.try_emplace(graphics_key);
     if (is_new) {
+        const auto start = Clock::now();
         it->second = CreateGraphicsPipeline();
+        compiler.Statistics().AddWait(ElapsedNs(start));
     }
     return it->second.get();
 }
 
+void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading,
+                                      const VideoCore::DiskResourceLoadCallback& callback) {
+    if (title_id == 0) {
+        return;
+    }
+    const auto shader_dir = Common::FS::GetCitronPath(Common::FS::CitronPath::ShaderDir);
+    const auto base_dir = shader_dir / fmt::format("{:016x}", title_id);
+    if (!Common::FS::CreateDir(shader_dir) || !Common::FS::CreateDir(base_dir)) {
+        LOG_ERROR(Common_Filesystem, "Failed to create pipeline cache directories");
+        return;
+    }
+    pipeline_cache_filename = base_dir / "metal.bin";
+    state_cache_filename = base_dir / "metal_states.bin";
+    const auto saved_states = LoadStates();
+
+    struct {
+        std::mutex mutex;
+        size_t total{};
+        size_t built{};
+        bool has_loaded{};
+        size_t skipped{};
+    } state;
+    const auto start = Clock::now();
+
+    const auto load_compute = [&](std::ifstream&, FileEnvironment) {
+        // Metal doesn't save compute pipelines.
+        ++state.skipped;
+    };
+    const auto load_graphics = [&](std::ifstream& file, std::vector<FileEnvironment> envs) {
+        GraphicsPipelineCacheKey key;
+        file.read(reinterpret_cast<char*>(&key), sizeof(key));
+        if (!std::ranges::all_of(envs, &FileEnvironment::HasValidEntryInstruction)) {
+            ++state.skipped;
+            return;
+        }
+        std::vector<AttachmentFormats> formats;
+        if (const auto it = saved_states.find(key.Hash()); it != saved_states.end()) {
+            formats = it->second;
+        }
+        workers.QueueWork([this, key, envs_ = std::move(envs), formats_ = std::move(formats),
+                           &state, &callback]() mutable {
+            @autoreleasepool {
+                ShaderPools pools;
+                boost::container::static_vector<Shader::Environment*, 5> env_ptrs;
+                for (auto& env : envs_) {
+                    env_ptrs.push_back(&env);
+                }
+                auto pipeline = CreateGraphicsPipeline(
+                    pools, key, std::span(env_ptrs.data(), env_ptrs.size()), false);
+                if (pipeline) {
+                    pipeline->PrebuildStates(formats_);
+                    if (!pipeline->IsFailed()) {
+                        ++compiler.Statistics().pipelines_loaded;
+                    }
+                }
+                std::scoped_lock lock{state.mutex};
+                if (pipeline) {
+                    graphics_cache.emplace(key, std::move(pipeline));
+                }
+                ++state.built;
+                if (state.has_loaded) {
+                    callback(VideoCore::LoadCallbackStage::Build, state.built, state.total);
+                }
+            }
+        });
+        ++state.total;
+    };
+    VideoCommon::LoadPipelines(stop_loading, pipeline_cache_filename, PIPELINE_CACHE_VERSION,
+                               load_compute, load_graphics);
+    if (state.skipped != 0) {
+        LOG_WARNING(Render_Metal, "Skipped {} invalid pipelines in the disk cache", state.skipped);
+    }
+    LOG_INFO(Render_Metal, "Building {} pipelines from the disk cache", state.total);
+    {
+        std::scoped_lock lock{state.mutex};
+        graphics_cache.reserve(graphics_cache.size() + state.total);
+        callback(VideoCore::LoadCallbackStage::Build, 0, state.total);
+        state.has_loaded = true;
+    }
+    workers.WaitForRequests(stop_loading);
+    if (state.total != 0) {
+        LOG_INFO(Render_Metal, "Built {} pipelines from the disk cache in {:.1f} s", state.total,
+                 Milliseconds(ElapsedNs(start)) / 1000.0);
+        LogStatistics("after loading the disk cache");
+        logged_pipeline_count =
+            compiler.Statistics().pipelines_built + compiler.Statistics().pipelines_failed;
+    }
+}
+
 std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline() {
-    const GraphicsPipelineCacheKey& key = graphics_key;
+    GraphicsEnvironments environments;
+    GetGraphicsEnvironments(environments, graphics_key.unique_hashes);
+    main_pools.ReleaseContents();
+    auto pipeline = CreateGraphicsPipeline(main_pools, graphics_key, environments.Span(),
+                                           use_asynchronous_shaders);
+    if (!pipeline || pipeline_cache_filename.empty()) {
+        return pipeline;
+    }
+    serialization_thread.QueueWork([this, key = graphics_key,
+                                    envs = std::move(environments.envs)] {
+        boost::container::static_vector<const GenericEnvironment*, Maxwell::MaxShaderProgram>
+            env_ptrs;
+        for (size_t index = 0; index < Maxwell::MaxShaderProgram; ++index) {
+            if (key.unique_hashes[index] != 0) {
+                env_ptrs.push_back(&envs[index]);
+            }
+        }
+        VideoCommon::SerializePipeline(key, env_ptrs, pipeline_cache_filename,
+                                       PIPELINE_CACHE_VERSION);
+    });
+    return pipeline;
+}
+
+std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
+    ShaderPools& pools, const GraphicsPipelineCacheKey& key,
+    std::span<Shader::Environment* const> envs, bool build_in_background) {
     // Program indices: VertexA, VertexB, TessellationControl, TessellationEval, Geometry,
     // Fragment.
     if (key.unique_hashes[2] != 0 || key.unique_hashes[3] != 0 || key.unique_hashes[4] != 0) {
-        static bool logged{};
-        if (!logged) {
-            logged = true;
+        static std::atomic<bool> logged{};
+        if (!logged.exchange(true)) {
             LOG_WARNING(Render_Metal, "Tessellation and geometry shaders are not supported on "
                                       "Metal; skipping their draws");
         }
         return nullptr;
     }
-    GraphicsEnvironments environments;
-    GetGraphicsEnvironments(environments, key.unique_hashes);
-    const auto envs = environments.Span();
-    main_pools.ReleaseContents();
-
+    const auto start = Clock::now();
     try {
         std::array<Shader::IR::Program, Maxwell::MaxShaderProgram> programs;
         const bool uses_vertex_a = key.unique_hashes[0] != 0;
@@ -271,13 +480,11 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline() {
             Shader::Environment& env = *envs[env_index++];
             const u32 cfg_offset =
                 static_cast<u32>(env.StartAddress() + sizeof(Shader::ProgramHeader));
-            Shader::Maxwell::Flow::CFG cfg(env, main_pools.flow_block, cfg_offset, index == 0);
+            Shader::Maxwell::Flow::CFG cfg(env, pools.flow_block, cfg_offset, index == 0);
             if (!uses_vertex_a || index != 1) {
-                programs[index] =
-                    TranslateProgram(main_pools.inst, main_pools.block, env, cfg, host_info);
+                programs[index] = TranslateProgram(pools.inst, pools.block, env, cfg, host_info);
             } else {
-                auto program_vb =
-                    TranslateProgram(main_pools.inst, main_pools.block, env, cfg, host_info);
+                auto program_vb = TranslateProgram(pools.inst, pools.block, env, cfg, host_info);
                 programs[index] = MergeDualVertexPrograms(programs[0], program_vb, env);
             }
             if (programs[index].info.requires_layer_emulation) {
@@ -285,7 +492,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline() {
             }
         }
 
-        std::array<std::optional<GraphicsStage>, GraphicsPipeline::NUM_STAGES> stages;
+        std::array<std::optional<StageSource>, GraphicsPipeline::NUM_STAGES> sources;
         std::array<const Shader::Info*, GraphicsPipeline::NUM_STAGES> infos{};
         Shader::Backend::Bindings bindings;
         const Shader::IR::Program* previous_stage = nullptr;
@@ -302,73 +509,104 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline() {
             const Shader::RuntimeInfo runtime_info = MakeRuntimeInfo(key, program, previous_stage);
             ConvertLegacyToGeneric(program, runtime_info);
             const u32 first_binding = bindings.unified;
-            const std::vector<u32> code = EmitSPIRV(profile, runtime_info, program, bindings);
-
-            MslTranslationOptions options{
-                .ios = TARGET_OS_IOS != 0,
-                .first_buffer_index = 0,
-                .flip_vertex_y = is_vertex,
-                .texture_1d_as_2d = true,
+            StageSource source{
+                .spirv = EmitSPIRV(profile, runtime_info, program, bindings),
+                .options =
+                    MslTranslationOptions{
+                        .ios = TARGET_OS_IOS != 0,
+                        .first_buffer_index = 0,
+                        .flip_vertex_y = is_vertex,
+                        .texture_1d_as_2d = true,
+                    },
+                .first_binding = first_binding,
             };
             if (is_vertex) {
                 // Keep the indices of the vertex buffers this pipeline reads free.
                 for (size_t attr = 0; attr < Maxwell::NumVertexAttributes; ++attr) {
                     const auto& attribute = key.state.attributes[attr];
                     if (attribute.enabled != 0 && program.info.loads.Generic(attr)) {
-                        options.buffer_index_limit =
-                            std::min(options.buffer_index_limit,
+                        source.options.buffer_index_limit =
+                            std::min(source.options.buffer_index_limit,
                                      VertexBufferIndex(attribute.buffer.Value()));
                     }
                 }
             }
-            MslTranslationResult result = TranslateSpirvToMsl(code, options);
-            if (!result.translation) {
-                throw std::runtime_error("SPIR-V to MSL translation failed: " + result.error);
-            }
-            id<MTLFunction> function = CompileFunction(*result.translation);
-            stages[stage_index] = GraphicsStage{
-                .function = function,
-                .translation = std::move(*result.translation),
-                .first_binding = first_binding,
-            };
+            sources[stage_index] = std::move(source);
             previous_stage = &program;
         }
-        if (!stages[GraphicsPipeline::VERTEX_STAGE]) {
+        if (!sources[GraphicsPipeline::VERTEX_STAGE]) {
             throw std::runtime_error("pipeline has no vertex shader");
         }
-        return std::make_unique<GraphicsPipeline>(device, scheduler, buffer_cache,
-                                                  buffer_cache_runtime, texture_cache, key,
-                                                  std::move(stages), infos);
+        compiler.Statistics().recompile_ns += ElapsedNs(start);
+        // The pipeline copies the infos, so the programs can go when this returns.
+        auto pipeline = std::make_unique<GraphicsPipeline>(
+            device, scheduler, buffer_cache, buffer_cache_runtime, texture_cache, compiler, key,
+            std::move(sources), infos, build_in_background);
+        if (!build_in_background) {
+            LOG_DEBUG(Render_Metal, "Built pipeline {:016x} in {:.1f} ms", key.Hash(),
+                      Milliseconds(ElapsedNs(start)));
+        }
+        return pipeline;
     } catch (const Shader::Exception& exception) {
-        LOG_ERROR(Render_Metal, "Failed to build a pipeline: {}", exception.what());
+        LOG_ERROR(Render_Metal, "Failed to build pipeline {:016x}: {}", key.Hash(),
+                  exception.what());
     } catch (const std::exception& exception) {
-        LOG_ERROR(Render_Metal, "Failed to build a pipeline: {}", exception.what());
+        LOG_ERROR(Render_Metal, "Failed to build pipeline {:016x}: {}", key.Hash(),
+                  exception.what());
     }
+    ++compiler.Statistics().pipelines_failed;
     return nullptr;
 }
 
-id<MTLFunction> PipelineCache::CompileFunction(const MslTranslation& translation) {
-    const u64 hash = Common::CityHash64(translation.source.data(), translation.source.size());
-    if (const auto it = functions.find(hash); it != functions.end()) {
-        return it->second;
+void PipelineCache::SaveState(u64 key_hash, const AttachmentFormats& formats) {
+    if (state_cache_filename.empty()) {
+        return;
     }
-    NSError* error = nil;
-    id<MTLLibrary> library =
-        [device.GetDevice() newLibraryWithSource:@(translation.source.c_str())
-                                         options:nil
-                                           error:&error];
-    if (library == nil) {
-        LOG_DEBUG(Render_Metal, "MSL that failed to compile:\n{}", translation.source);
-        throw std::runtime_error(std::string{"MSL compilation failed: "} +
-                                 error.localizedDescription.UTF8String);
+    serialization_thread.QueueWork([this, record = StateRecord{key_hash, formats}] {
+        std::scoped_lock lock{state_file_mutex};
+        std::ofstream file(state_cache_filename, std::ios::binary | std::ios::ate | std::ios::app);
+        if (!file.is_open()) {
+            return;
+        }
+        if (file.tellp() == 0) {
+            file.write(STATE_CACHE_MAGIC.data(), STATE_CACHE_MAGIC.size())
+                .write(reinterpret_cast<const char*>(&STATE_CACHE_VERSION),
+                       sizeof(STATE_CACHE_VERSION));
+        }
+        file.write(reinterpret_cast<const char*>(&record), sizeof(record));
+    });
+}
+
+std::unordered_map<u64, std::vector<AttachmentFormats>> PipelineCache::LoadStates() {
+    std::unordered_map<u64, std::vector<AttachmentFormats>> states;
+    std::scoped_lock lock{state_file_mutex};
+    std::ifstream file(state_cache_filename, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+        return states;
     }
-    id<MTLFunction> function =
-        [library newFunctionWithName:@(translation.entry_point.c_str())];
-    if (function == nil) {
-        throw std::runtime_error("MSL entry point " + translation.entry_point + " not found");
+    const auto size = static_cast<size_t>(file.tellg());
+    file.seekg(0, std::ios::beg);
+    std::array<char, 8> magic{};
+    u32 version{};
+    file.read(magic.data(), magic.size()).read(reinterpret_cast<char*>(&version), sizeof(version));
+    const size_t header_size = magic.size() + sizeof(version);
+    if (!file || magic != STATE_CACHE_MAGIC || version != STATE_CACHE_VERSION ||
+        (size - header_size) % sizeof(StateRecord) != 0) {
+        file.close();
+        LOG_INFO(Render_Metal, "Deleting an old or invalid pipeline state cache");
+        Common::FS::RemoveFile(state_cache_filename);
+        return states;
     }
-    functions.emplace(hash, function);
-    return function;
+    std::vector<StateRecord> records((size - header_size) / sizeof(StateRecord));
+    file.read(reinterpret_cast<char*>(records.data()),
+              static_cast<std::streamsize>(records.size() * sizeof(StateRecord)));
+    for (const StateRecord& record : records) {
+        auto& formats = states[record.key_hash];
+        if (std::ranges::find(formats, record.formats) == formats.end()) {
+            formats.push_back(record.formats);
+        }
+    }
+    return states;
 }
 
 } // namespace Metal

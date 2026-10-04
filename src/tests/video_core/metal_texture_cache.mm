@@ -172,6 +172,67 @@ TEST_CASE("Metal images round-trip levels and layers", "[video_core][metal]") {
     REQUIRE(fixture.Download(image, data.size(), copies) == data);
 }
 
+TEST_CASE("Metal depth/stencil images round-trip guest texels", "[video_core][metal]") {
+    const auto device = MakeDevice();
+    if (!device) {
+        return;
+    }
+    Fixture fixture(*device);
+    // 24-bit depth is stored as 32-bit float, and depth and stencil are copied separately, so
+    // these go through the conversion kernels. Rows are padded to check the guest row length.
+    constexpr u32 width = 7;
+    constexpr u32 height = 5;
+    constexpr u32 row_length = 8;
+    constexpr s32 layers = 2;
+    for (const PixelFormat format :
+         {PixelFormat::X8_D24_UNORM, PixelFormat::D24_UNORM_S8_UINT,
+          PixelFormat::S8_UINT_D24_UNORM, PixelFormat::D32_FLOAT_S8_UINT}) {
+        INFO("format " << static_cast<u32>(format));
+        const bool is_d32 = format == PixelFormat::D32_FLOAT_S8_UINT;
+        const u32 words_per_texel = is_d32 ? 2 : 1;
+        const size_t texels = size_t{row_length} * height * layers;
+        std::vector<u32> guest(texels * words_per_texel);
+        u32 seed = 1;
+        for (size_t texel = 0; texel < texels; ++texel) {
+            seed = seed * 1664525U + 1013904223U;
+            if (is_d32) {
+                const float depth = static_cast<float>(seed % 4096) / 4096.0f;
+                std::memcpy(&guest[texel * 2], &depth, sizeof(depth));
+                guest[texel * 2 + 1] = seed >> 24;
+            } else if (format == PixelFormat::X8_D24_UNORM) {
+                guest[texel] = seed & 0xFFFFFF;
+            } else {
+                guest[texel] = seed;
+            }
+        }
+        BufferImageCopy copy{
+            .buffer_offset = 0,
+            .buffer_size = guest.size() * sizeof(u32),
+            .buffer_row_length = row_length,
+            .buffer_image_height = height,
+            .image_subresource = {.base_level = 0, .base_layer = 0, .num_layers = layers},
+            .image_offset = {0, 0, 0},
+            .image_extent = {width, height, 1},
+        };
+        Image image(fixture.runtime, MakeInfo(format, width, height, 1, layers), 0, 0);
+        fixture.Upload(image, Bytes(guest), std::span(&copy, 1));
+        const std::vector<u32> result =
+            Words(fixture.Download(image, guest.size() * sizeof(u32), std::span(&copy, 1)));
+        for (s32 layer = 0; layer < layers; ++layer) {
+            for (u32 y = 0; y < height; ++y) {
+                for (u32 x = 0; x < width; ++x) {
+                    const size_t texel = (static_cast<size_t>(layer) * height + y) * row_length + x;
+                    for (u32 word = 0; word < words_per_texel; ++word) {
+                        INFO("layer " << layer << " x " << x << " y " << y << " word " << word);
+                        REQUIRE(result[texel * words_per_texel + word] ==
+                                guest[texel * words_per_texel + word]);
+                    }
+                }
+            }
+        }
+    }
+}
+
 TEST_CASE("Metal images copy between images of the same format", "[video_core][metal]") {
     const auto device = MakeDevice();
     if (!device) {

@@ -71,8 +71,9 @@ RendererMetal::RendererMetal(Core::Frontend::EmuWindow& emu_window,
       presenter(*device, emu_window.GetWindowInfo().render_surface),
       rasterizer(std::make_unique<RasterizerMetal>(gpu_, device_memory_, *device, *scheduler,
                                                    *staging_buffer_pool)) {
-    LOG_WARNING(Render_Metal, "The Metal renderer is experimental: it clears, copies and "
-                              "presents, but does not draw GPU-rendered graphics yet");
+    LOG_WARNING(Render_Metal, "The Metal renderer is experimental: it draws with vertex and "
+                              "fragment shaders, but compute, tessellation, geometry shaders and "
+                              "texture buffers are not implemented yet");
 }
 
 RendererMetal::~RendererMetal() = default;

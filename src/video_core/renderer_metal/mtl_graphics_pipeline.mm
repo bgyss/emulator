@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -18,6 +19,7 @@
 #include "video_core/renderer_metal/mtl_device.h"
 #include "video_core/renderer_metal/mtl_graphics_pipeline.h"
 #include "video_core/renderer_metal/mtl_scheduler.h"
+#include "video_core/shader_notify.h"
 #include "video_core/texture_cache/texture_cache.h"
 
 namespace Metal {
@@ -86,6 +88,13 @@ MTLColorWriteMask WriteMask(const Vulkan::FixedPipelineState::BlendingAttachment
     return mask;
 }
 
+using Clock = std::chrono::steady_clock;
+
+u64 ElapsedNs(Clock::time_point start) {
+    return static_cast<u64>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - start).count());
+}
+
 void LogOnce(bool& logged, const char* message) {
     if (!logged) {
         logged = true;
@@ -111,28 +120,182 @@ bool GraphicsPipelineCacheKey::operator==(const GraphicsPipelineCacheKey& rhs) c
            vertex_strides == rhs.vertex_strides;
 }
 
+AttachmentFormats AttachmentFormats::From(const Framebuffer& framebuffer) {
+    AttachmentFormats formats;
+    for (size_t index = 0; index < NUM_RT; ++index) {
+        formats.color[index] = framebuffer.ColorAttachment(index) != nil
+                                   ? static_cast<u32>(framebuffer.ColorFormat(index))
+                                   : static_cast<u32>(MTLPixelFormatInvalid);
+    }
+    formats.depth = static_cast<u32>(framebuffer.DepthFormat());
+    formats.samples = static_cast<u32>(framebuffer.Samples());
+    return formats;
+}
+
+u64 AttachmentFormats::Hash() const noexcept {
+    static_assert(std::has_unique_object_representations_v<AttachmentFormats>);
+    return Common::CityHash64(reinterpret_cast<const char*>(this), sizeof(*this));
+}
+
+void PipelineStatistics::AddWait(u64 ns) noexcept {
+    wait_ns += ns;
+    u64 max = max_wait_ns.load(std::memory_order_relaxed);
+    while (ns > max && !max_wait_ns.compare_exchange_weak(max, ns, std::memory_order_relaxed)) {
+    }
+}
+
+PipelineCompiler::PipelineCompiler(const Device& device_) : device{device_} {}
+
+PipelineCompiler::~PipelineCompiler() = default;
+
+GraphicsStage PipelineCompiler::Compile(const StageSource& source) {
+    const auto translate_start = Clock::now();
+    MslTranslationResult result = TranslateSpirvToMsl(source.spirv, source.options);
+    statistics.translate_ns += ElapsedNs(translate_start);
+    if (!result.translation) {
+        throw std::runtime_error("SPIR-V to MSL translation failed: " + result.error);
+    }
+    MslTranslation& translation = *result.translation;
+    const u64 hash = Common::CityHash64(translation.source.data(), translation.source.size());
+    {
+        std::scoped_lock lock{mutex};
+        if (const auto it = functions.find(hash); it != functions.end()) {
+            ++statistics.functions_shared;
+            return GraphicsStage{
+                .function = it->second,
+                .translation = std::move(translation),
+                .first_binding = source.first_binding,
+            };
+        }
+    }
+    // Two threads may compile the same source at once; both results work, the first is kept.
+    const auto compile_start = Clock::now();
+    NSError* error = nil;
+    id<MTLLibrary> library =
+        [device.GetDevice() newLibraryWithSource:@(translation.source.c_str())
+                                         options:nil
+                                           error:&error];
+    if (library == nil) {
+        LOG_DEBUG(Render_Metal, "MSL that failed to compile:\n{}", translation.source);
+        throw std::runtime_error(std::string{"MSL compilation failed: "} +
+                                 (error != nil ? error.localizedDescription.UTF8String : "?"));
+    }
+    id<MTLFunction> function =
+        [library newFunctionWithName:@(translation.entry_point.c_str())];
+    if (function == nil) {
+        throw std::runtime_error("MSL entry point " + translation.entry_point + " not found");
+    }
+    statistics.compile_ns += ElapsedNs(compile_start);
+    ++statistics.functions_compiled;
+    {
+        std::scoped_lock lock{mutex};
+        function = functions.emplace(hash, function).first->second;
+    }
+    return GraphicsStage{
+        .function = function,
+        .translation = std::move(translation),
+        .first_binding = source.first_binding,
+    };
+}
+
 GraphicsPipeline::GraphicsPipeline(const Device& device_, Scheduler& scheduler_,
                                    BufferCache& buffer_cache_,
                                    BufferCacheRuntime& buffer_cache_runtime_,
-                                   TextureCache& texture_cache_,
+                                   TextureCache& texture_cache_, PipelineCompiler& compiler_,
                                    const GraphicsPipelineCacheKey& key_,
-                                   std::array<std::optional<GraphicsStage>, NUM_STAGES> stages_,
-                                   const std::array<const Shader::Info*, NUM_STAGES>& infos)
+                                   std::array<std::optional<StageSource>, NUM_STAGES> sources_,
+                                   const std::array<const Shader::Info*, NUM_STAGES>& infos,
+                                   bool build_in_background)
     : device{device_}, scheduler{scheduler_}, buffer_cache{buffer_cache_},
-      buffer_cache_runtime{buffer_cache_runtime_}, texture_cache{texture_cache_}, key{key_},
-      stages{std::move(stages_)} {
+      buffer_cache_runtime{buffer_cache_runtime_}, texture_cache{texture_cache_},
+      compiler{compiler_}, key{key_}, key_hash{key_.Hash()}, sources{std::move(sources_)} {
     for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
         const Shader::Info* const info = infos[stage];
-        if (!info || !stages[stage]) {
+        if (!info || !sources[stage]) {
             continue;
         }
+        stage_enabled[stage] = true;
         stage_infos[stage] = *info;
         enabled_uniform_buffer_masks[stage] = info->constant_buffer_mask;
         std::ranges::copy(info->constant_buffer_used_sizes, uniform_buffer_sizes[stage].begin());
+    }
+    if (build_in_background && compiler.workers != nullptr) {
+        notify_shader_built = compiler.shader_notify != nullptr;
+        if (notify_shader_built) {
+            compiler.shader_notify->MarkShaderBuilding();
+        }
+        compiler.workers->QueueWork([this] { Build(); });
+    } else {
+        Build();
+    }
+}
+
+GraphicsPipeline::~GraphicsPipeline() = default;
+
+void GraphicsPipeline::Build() {
+    if (build_claimed.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
+    @autoreleasepool {
+        try {
+            BuildStages();
+            ++compiler.Statistics().pipelines_built;
+        } catch (const std::exception& exception) {
+            LOG_ERROR(Render_Metal, "Failed to build pipeline {:016x}: {}", key_hash,
+                      exception.what());
+            ++compiler.Statistics().pipelines_failed;
+            failed.store(true, std::memory_order_release);
+        }
+    }
+    // The SPIR-V isn't needed anymore.
+    sources = {};
+    std::vector<AttachmentFormats> requested;
+    {
+        std::scoped_lock lock{state_mutex};
+        built.store(true, std::memory_order_release);
+        requested.swap(requested_states);
+    }
+    state_condvar.notify_all();
+    if (notify_shader_built) {
+        compiler.shader_notify->MarkShaderComplete();
+    }
+    for (const AttachmentFormats& formats : requested) {
+        if (IsFailed()) {
+            std::scoped_lock lock{state_mutex};
+            pending_states.erase(formats.Hash());
+            continue;
+        }
+        BuildState(formats, true);
+    }
+    if (!requested.empty()) {
+        state_condvar.notify_all();
+    }
+}
+
+void GraphicsPipeline::WaitBuilt() {
+    if (IsBuilt()) {
+        return;
+    }
+    const auto start = Clock::now();
+    if (!build_claimed.load(std::memory_order_acquire)) {
+        // No worker has started on it: build it here instead of waiting in the queue.
+        Build();
+    }
+    std::unique_lock lock{state_mutex};
+    state_condvar.wait(lock, [this] { return IsBuilt(); });
+    compiler.Statistics().AddWait(ElapsedNs(start));
+}
+
+void GraphicsPipeline::BuildStages() {
+    for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
+        if (!stage_enabled[stage]) {
+            continue;
+        }
+        stages[stage] = compiler.Compile(*sources[stage]);
 
         const GraphicsStage& data = *stages[stage];
         auto& by_binding = stage_bindings[stage].by_binding;
-        by_binding.resize(NumBindings(*info));
+        by_binding.resize(NumBindings(stage_infos[stage]));
         for (const MslBinding& binding : data.translation.bindings) {
             if (binding.binding >= data.first_binding &&
                 binding.binding - data.first_binding < by_binding.size()) {
@@ -140,10 +303,14 @@ GraphicsPipeline::GraphicsPipeline(const Device& device_, Scheduler& scheduler_,
             }
         }
     }
+    if (!stages[VERTEX_STAGE]) {
+        throw std::runtime_error("pipeline has no vertex shader");
+    }
 
     // Vertex input: every attribute the vertex shader reads.
-    vertex_descriptor = [MTLVertexDescriptor vertexDescriptor];
+    MTLVertexDescriptor* descriptor = [MTLVertexDescriptor vertexDescriptor];
     const Shader::Info& vertex_info = stage_infos[VERTEX_STAGE];
+    u32 vertex_buffers = 0;
     for (size_t index = 0; index < Maxwell::NumVertexAttributes; ++index) {
         const auto& attribute = key.state.attributes[index];
         if (attribute.enabled == 0 || !vertex_info.loads.Generic(index)) {
@@ -158,18 +325,17 @@ GraphicsPipeline::GraphicsPipeline(const Device& device_, Scheduler& scheduler_,
             throw std::runtime_error("vertex attribute format has no Metal equivalent");
         }
         const u32 buffer = attribute.buffer;
-        MTLVertexAttributeDescriptor* desc = vertex_descriptor.attributes[index];
+        MTLVertexAttributeDescriptor* desc = descriptor.attributes[index];
         desc.format = format;
         desc.offset = attribute.offset;
         desc.bufferIndex = VertexBufferIndex(buffer);
-        used_vertex_buffers |= 1U << buffer;
+        vertex_buffers |= 1U << buffer;
     }
     for (u32 buffer = 0; buffer < Maxwell::NumVertexArrays; ++buffer) {
-        if ((used_vertex_buffers & (1U << buffer)) == 0) {
+        if ((vertex_buffers & (1U << buffer)) == 0) {
             continue;
         }
-        MTLVertexBufferLayoutDescriptor* layout =
-            vertex_descriptor.layouts[VertexBufferIndex(buffer)];
+        MTLVertexBufferLayoutDescriptor* layout = descriptor.layouts[VertexBufferIndex(buffer)];
         const u32 stride = key.vertex_strides[buffer];
         const u32 divisor = key.state.binding_divisors[buffer];
         if (stride == 0) {
@@ -190,76 +356,150 @@ GraphicsPipeline::GraphicsPipeline(const Device& device_, Scheduler& scheduler_,
             }
         }
     }
+    vertex_descriptor = descriptor;
+    used_vertex_buffers = vertex_buffers;
 }
 
-id<MTLRenderPipelineState> GraphicsPipeline::PipelineState(const Framebuffer& framebuffer) {
-    const MTLPixelFormat depth_format = framebuffer.DepthFormat();
-    u64 signature = Common::CityHash64(reinterpret_cast<const char*>(&depth_format),
-                                       sizeof(depth_format));
-    std::array<MTLPixelFormat, NUM_RT> color_formats{};
-    for (size_t index = 0; index < NUM_RT; ++index) {
-        color_formats[index] = framebuffer.ColorAttachment(index) != nil
-                                   ? framebuffer.ColorFormat(index)
-                                   : MTLPixelFormatInvalid;
+void GraphicsPipeline::BuildState(const AttachmentFormats& formats, bool remember) {
+    const u64 hash = formats.Hash();
+    id<MTLRenderPipelineState> state = nil;
+    @autoreleasepool {
+        const auto start = Clock::now();
+        MTLRenderPipelineDescriptor* desc = [[MTLRenderPipelineDescriptor alloc] init];
+        desc.vertexFunction = stages[VERTEX_STAGE]->function;
+        if (stages[FRAGMENT_STAGE]) {
+            desc.fragmentFunction = stages[FRAGMENT_STAGE]->function;
+        }
+        desc.vertexDescriptor = vertex_descriptor;
+        desc.rasterSampleCount = formats.samples;
+        desc.alphaToCoverageEnabled = key.state.alpha_to_coverage_enabled != 0;
+        desc.alphaToOneEnabled = key.state.alpha_to_one_enabled != 0;
+        for (size_t index = 0; index < NUM_RT; ++index) {
+            const auto format = static_cast<MTLPixelFormat>(formats.color[index]);
+            MTLRenderPipelineColorAttachmentDescriptor* color = desc.colorAttachments[index];
+            color.pixelFormat = format;
+            if (format == MTLPixelFormatInvalid) {
+                continue;
+            }
+            const auto& blend = key.state.attachments[index];
+            color.writeMask = WriteMask(blend);
+            // Metal can't blend integer formats.
+            color.blendingEnabled = blend.enable != 0 && !IsIntegerFormat(format);
+            if (color.blendingEnabled) {
+                color.rgbBlendOperation = MaxwellToMTL::BlendEquation(blend.EquationRGB());
+                color.alphaBlendOperation = MaxwellToMTL::BlendEquation(blend.EquationAlpha());
+                color.sourceRGBBlendFactor = MaxwellToMTL::BlendFactor(blend.SourceRGBFactor());
+                color.destinationRGBBlendFactor =
+                    MaxwellToMTL::BlendFactor(blend.DestRGBFactor());
+                color.sourceAlphaBlendFactor =
+                    MaxwellToMTL::BlendFactor(blend.SourceAlphaFactor());
+                color.destinationAlphaBlendFactor =
+                    MaxwellToMTL::BlendFactor(blend.DestAlphaFactor());
+            }
+        }
+        const auto depth_format = static_cast<MTLPixelFormat>(formats.depth);
+        if (ClearHelper::HasDepth(depth_format)) {
+            desc.depthAttachmentPixelFormat = depth_format;
+        }
+        if (ClearHelper::HasStencil(depth_format)) {
+            desc.stencilAttachmentPixelFormat = depth_format;
+        }
+        NSError* error = nil;
+        state = [device.GetDevice() newRenderPipelineStateWithDescriptor:desc error:&error];
+        if (state == nil) {
+            LOG_ERROR(Render_Metal, "Failed to create a render pipeline: {}",
+                      error != nil ? error.localizedDescription.UTF8String : "?");
+        } else {
+            compiler.Statistics().state_ns += ElapsedNs(start);
+            ++compiler.Statistics().states_built;
+        }
     }
-    signature ^= Common::CityHash64(reinterpret_cast<const char*>(color_formats.data()),
-                                    sizeof(color_formats)) *
-                 31;
-    signature ^= framebuffer.Samples() << 56;
-    if (const auto it = pipeline_states.find(signature); it != pipeline_states.end()) {
+    {
+        // Remember failures too, so they are logged once.
+        std::scoped_lock lock{state_mutex};
+        pipeline_states.insert_or_assign(hash, state);
+        pending_states.erase(hash);
+    }
+    state_condvar.notify_all();
+    if (state != nil && remember && compiler.on_state_built) {
+        compiler.on_state_built(key_hash, formats);
+    }
+}
+
+void GraphicsPipeline::PrebuildStates(std::span<const AttachmentFormats> formats) {
+    if (!IsBuilt() || IsFailed()) {
+        return;
+    }
+    for (const AttachmentFormats& entry : formats) {
+        {
+            std::scoped_lock lock{state_mutex};
+            const u64 hash = entry.Hash();
+            if (pipeline_states.contains(hash) || !pending_states.insert(hash).second) {
+                continue;
+            }
+        }
+        BuildState(entry, false);
+    }
+}
+
+void GraphicsPipeline::RequestState(const AttachmentFormats& formats) {
+    const u64 hash = formats.Hash();
+    std::scoped_lock lock{state_mutex};
+    if (pipeline_states.contains(hash) || !pending_states.insert(hash).second) {
+        return;
+    }
+    if (!IsBuilt()) {
+        // Build creates it right after the functions.
+        requested_states.push_back(formats);
+        return;
+    }
+    compiler.workers->QueueWork([this, formats] { BuildState(formats, true); });
+}
+
+id<MTLRenderPipelineState> GraphicsPipeline::PipelineState(const AttachmentFormats& formats,
+                                                            bool may_skip) {
+    const u64 hash = formats.Hash();
+    std::unique_lock lock{state_mutex};
+    if (const auto it = pipeline_states.find(hash); it != pipeline_states.end()) {
         return it->second;
     }
-
-    MTLRenderPipelineDescriptor* desc = [[MTLRenderPipelineDescriptor alloc] init];
-    desc.vertexFunction = stages[VERTEX_STAGE]->function;
-    if (stages[FRAGMENT_STAGE]) {
-        desc.fragmentFunction = stages[FRAGMENT_STAGE]->function;
-    }
-    desc.vertexDescriptor = vertex_descriptor;
-    desc.rasterSampleCount = framebuffer.Samples();
-    desc.alphaToCoverageEnabled = key.state.alpha_to_coverage_enabled != 0;
-    desc.alphaToOneEnabled = key.state.alpha_to_one_enabled != 0;
-    for (size_t index = 0; index < NUM_RT; ++index) {
-        MTLRenderPipelineColorAttachmentDescriptor* color = desc.colorAttachments[index];
-        color.pixelFormat = color_formats[index];
-        if (color_formats[index] == MTLPixelFormatInvalid) {
-            continue;
+    const auto start = Clock::now();
+    if (pending_states.contains(hash)) {
+        if (may_skip) {
+            return nil;
         }
-        const auto& blend = key.state.attachments[index];
-        color.writeMask = WriteMask(blend);
-        // Metal can't blend integer formats.
-        color.blendingEnabled = blend.enable != 0 && !IsIntegerFormat(color_formats[index]);
-        if (color.blendingEnabled) {
-            color.rgbBlendOperation = MaxwellToMTL::BlendEquation(blend.EquationRGB());
-            color.alphaBlendOperation = MaxwellToMTL::BlendEquation(blend.EquationAlpha());
-            color.sourceRGBBlendFactor = MaxwellToMTL::BlendFactor(blend.SourceRGBFactor());
-            color.destinationRGBBlendFactor = MaxwellToMTL::BlendFactor(blend.DestRGBFactor());
-            color.sourceAlphaBlendFactor = MaxwellToMTL::BlendFactor(blend.SourceAlphaFactor());
-            color.destinationAlphaBlendFactor = MaxwellToMTL::BlendFactor(blend.DestAlphaFactor());
-        }
+        // Another thread is building it.
+        state_condvar.wait(lock, [&] { return !pending_states.contains(hash); });
+        compiler.Statistics().AddWait(ElapsedNs(start));
+        const auto it = pipeline_states.find(hash);
+        return it != pipeline_states.end() ? it->second : nil;
     }
-    if (ClearHelper::HasDepth(depth_format)) {
-        desc.depthAttachmentPixelFormat = depth_format;
+    pending_states.insert(hash);
+    if (may_skip && compiler.workers != nullptr) {
+        compiler.workers->QueueWork([this, formats] { BuildState(formats, true); });
+        return nil;
     }
-    if (ClearHelper::HasStencil(depth_format)) {
-        desc.stencilAttachmentPixelFormat = depth_format;
-    }
-    NSError* error = nil;
-    id<MTLRenderPipelineState> state =
-        [device.GetDevice() newRenderPipelineStateWithDescriptor:desc error:&error];
-    if (state == nil) {
-        LOG_ERROR(Render_Metal, "Failed to create a render pipeline: {}",
-                  error.localizedDescription.UTF8String);
-    }
-    // Remember failures too, so they are logged once.
-    pipeline_states.emplace(signature, state);
-    return state;
+    lock.unlock();
+    BuildState(formats, true);
+    compiler.Statistics().AddWait(ElapsedNs(start));
+    lock.lock();
+    return pipeline_states[hash];
 }
 
 id<MTLRenderCommandEncoder> GraphicsPipeline::Configure(Tegra::Engines::Maxwell3D& maxwell3d,
                                                         Tegra::MemoryManager& gpu_memory,
-                                                        bool is_indexed) {
-    if (failed) {
+                                                        bool is_indexed, bool may_skip) {
+    if (!IsBuilt()) {
+        if (may_skip && compiler.workers != nullptr) {
+            // Have the pipeline state for the current framebuffer built along with it.
+            texture_cache.UpdateRenderTargets(false);
+            RequestState(AttachmentFormats::From(*texture_cache.GetFramebuffer()));
+            ++compiler.Statistics().draws_skipped;
+            return nil;
+        }
+        WaitBuilt();
+    }
+    if (IsFailed()) {
         return nil;
     }
     thread_local boost::container::small_vector<ImageViewInOut, 64> views;
@@ -379,8 +619,12 @@ id<MTLRenderCommandEncoder> GraphicsPipeline::Configure(Tegra::Engines::Maxwell3
 
     texture_cache.UpdateRenderTargets(false);
     const Framebuffer* const framebuffer = texture_cache.GetFramebuffer();
-    id<MTLRenderPipelineState> state = PipelineState(*framebuffer);
+    id<MTLRenderPipelineState> state =
+        PipelineState(AttachmentFormats::From(*framebuffer), may_skip);
     if (state == nil) {
+        if (may_skip) {
+            ++compiler.Statistics().draws_skipped;
+        }
         return nil;
     }
     // Everything that copies or uploads is done; the render pass starts here.
