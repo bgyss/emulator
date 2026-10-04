@@ -34,10 +34,12 @@ target_link_libraries(tests PRIVATE ${PLATFORM_LIBRARIES} Catch2::Catch2WithMain
 if (CITRON_ENABLE_METAL)
     # Objective-C++ so the tests can drive Metal directly.
     target_sources(tests PRIVATE
+        video_core/metal_buffer_cache.mm
         video_core/metal_scheduler.mm
         video_core/metal_shader_translator.mm
     )
     set_source_files_properties(
+        video_core/metal_buffer_cache.mm
         video_core/metal_scheduler.mm
         video_core/metal_shader_translator.mm
         PROPERTIES
