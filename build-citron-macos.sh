@@ -26,6 +26,7 @@
 #   --lto / --no-lto      Link-time optimization  (default: off)
 #   --tests               Also build the Catch2 `tests` binary
 #   --metal               Also build the experimental native Metal renderer
+#   --asan                Build with AddressSanitizer (use a separate --build-dir)
 #   --jobs <n>            Parallel build jobs     (default: all cores)
 #
 # Runtime notes (Apple Silicon):
@@ -60,6 +61,7 @@ BUILD_DIR="build/macos"
 LTO="OFF"
 TESTS="OFF"
 METAL="OFF"
+ASAN="OFF"
 JOBS="$(sysctl -n hw.logicalcpu)"
 CPM_SOURCE_CACHE="${CPM_SOURCE_CACHE:-${HOME}/.cache/cpm}"
 HOST_ARCH="$(uname -m)"
@@ -72,6 +74,7 @@ while [[ $# -gt 0 ]]; do
         --no-lto)     LTO="OFF"; shift ;;
         --tests)      TESTS="ON"; shift ;;
         --metal)      METAL="ON"; shift ;;
+        --asan)       ASAN="ON"; shift ;;
         --jobs)       JOBS="${2:?--jobs needs a value}"; shift 2 ;;
         -h|--help)    usage; exit 0 ;;
         *) error "Unknown argument: $1\nRun with --help for usage." ;;
@@ -149,6 +152,15 @@ stage_build() {
         "-DCITRON_BUILD_TYPE=Release"
         "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
     )
+    if [[ "${ASAN}" == "ON" ]]; then
+        local asan_flags="-fsanitize=address -fno-omit-frame-pointer"
+        cmake_args+=(
+            "-DCMAKE_C_FLAGS=${asan_flags}"
+            "-DCMAKE_CXX_FLAGS=${asan_flags}"
+            "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address"
+            "-DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address"
+        )
+    fi
 
     info "Configuring (the first run downloads Qt, MoltenVK and all CPM dependencies)"
     cmake "${cmake_args[@]}"
