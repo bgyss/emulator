@@ -72,9 +72,15 @@ Still not done / needs a human with hardware or another toolchain:
 - The Windows script's duplicate-symbol linker workarounds (`__cpuidex`,
   `--allow-multiple-definition`, the `SDL_*_REAL` strip regex) may no longer be needed; this can
   only be checked with a Windows or llvm-mingw build.
-- `externals/CMakeLists.txt` only applies its unused-subsystem toggles when SDL is added as a
-  subdirectory. The CPM path builds Camera, GPU, Render, Dialog and Tray as well; turning those
-  off through the CPM `OPTIONS` would trim the build but has not been tried.
+
+Unused SDL3 subsystems are trimmed through the CPM `OPTIONS` in `CMakeModules/dependencies.cmake`:
+Camera, Dialog, GPU, Power, Render and Tray are off. Citron only initialises Audio, Video,
+Joystick and Gamepad; Haptic and Sensor stay on, as the original build comment kept them. On
+macOS this shrinks `libSDL3.a` from 4.6 MB to 3.6 MB and the `citron` binary by about 0.8 MB. The
+macOS build, `citron-cmd --help` and a joystick/gamepad/HID/audio/video smoke test still pass with
+the trimmed library. The same options apply to the other desktop toolchains but have only been
+built on macOS. (`externals/CMakeLists.txt` has its own subsystem toggles, but they only apply when
+SDL is added as a subdirectory, not through CPM.)
 
 ## Phase 1: build system
 

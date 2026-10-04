@@ -424,6 +424,14 @@ if (CITRON_USE_EXTERNAL_SDL3 AND NOT TARGET SDL3::SDL3)
             "SDL_INSTALL OFF"
             "SDL_FORCE_STATIC_VCRT OFF"
             "SDL_HIDAPI_LIBUSB ON"
+            # Citron only initialises Audio, Video, Joystick and Gamepad (plus the Haptic and
+            # Sensor subsystems they can pull in); turn off the rest of SDL3's subsystems.
+            "SDL_CAMERA OFF"
+            "SDL_DIALOG OFF"
+            "SDL_GPU OFF"
+            "SDL_POWER OFF"
+            "SDL_RENDER OFF"
+            "SDL_TRAY OFF"
     )
 endif()
 
